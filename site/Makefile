@@ -1,24 +1,6 @@
-#
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
-
-BUNDLE = bundle
-JEKYLL = $(BUNDLE) exec jekyll
+BUNDLER_VERSION = 1.15.1
+BUNDLE = bundle _${BUNDLER_VERSION}_
+JEKYLL = ${BUNDLE} exec jekyll
 
 deep_clean:
 	rm -rf \
@@ -42,23 +24,21 @@ clean_local:
 
 ruby_setup:
 	gem install bundler \
+		-v ${BUNDLER_VERSION} \
 		--no-rdoc \
 		--no-ri
-	NOKOGIRI_USE_SYSTEM_LIBRARIES=true $(BUNDLE) install \
+	NOKOGIRI_USE_SYSTEM_LIBRARIES=true ${BUNDLE} install \
 		--path vendor/bundle
 
 python_setup:
 	sudo pip install pdoc pygments
 
 setup: ruby_setup
-	scripts/htmltest-setup.sh osx
-
-linkcheck_macos:
-	scripts/htmltest-osx
 
 travis_setup: ruby_setup python_setup
 
 travis_build: javadoc
+	scripts/build-all-versions.sh
 
 travis_publish:
 	scripts/publish-website.sh
@@ -67,9 +47,8 @@ build: api_docs
 	scripts/build-all-versions.sh
 
 serve: clean_local
-	$(JEKYLL) serve \
+	${JEKYLL} serve \
 		--incremental \
-		--livereload \
 		--config _config.yml,_config.local.yml
 
 javadoc:

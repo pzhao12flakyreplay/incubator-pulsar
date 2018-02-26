@@ -18,25 +18,28 @@
  */
 package org.apache.pulsar.client.impl;
 
-import io.netty.util.Timeout;
-import io.netty.util.TimerTask;
 import java.io.Closeable;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import org.apache.pulsar.client.api.MessageId;
+
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.netty.util.Timeout;
+import io.netty.util.TimerTask;
+
 public class UnAckedMessageTracker implements Closeable {
     private static final Logger log = LoggerFactory.getLogger(UnAckedMessageTracker.class);
-    protected ConcurrentOpenHashSet<MessageId> currentSet;
-    protected ConcurrentOpenHashSet<MessageId> oldOpenSet;
+    private ConcurrentOpenHashSet<MessageIdImpl> currentSet;
+    private ConcurrentOpenHashSet<MessageIdImpl> oldOpenSet;
     private final ReentrantReadWriteLock readWriteLock;
-    protected final Lock readLock;
+    private final Lock readLock;
     private final Lock writeLock;
     private Timeout timeout;
 
@@ -48,17 +51,17 @@ public class UnAckedMessageTracker implements Closeable {
         }
 
         @Override
-        public boolean add(MessageId m) {
+        public boolean add(MessageIdImpl m) {
             return true;
         }
 
         @Override
-        public boolean remove(MessageId m) {
+        public boolean remove(MessageIdImpl m) {
             return true;
         }
 
         @Override
-        public int removeMessagesTill(MessageId msgId) {
+        public int removeMessagesTill(MessageIdImpl msgId) {
             return 0;
         }
 
@@ -74,8 +77,8 @@ public class UnAckedMessageTracker implements Closeable {
     }
 
     public UnAckedMessageTracker(PulsarClientImpl client, ConsumerBase consumerBase, long ackTimeoutMillis) {
-        currentSet = new ConcurrentOpenHashSet<MessageId>();
-        oldOpenSet = new ConcurrentOpenHashSet<MessageId>();
+        currentSet = new ConcurrentOpenHashSet<MessageIdImpl>();
+        oldOpenSet = new ConcurrentOpenHashSet<MessageIdImpl>();
         readWriteLock = new ReentrantReadWriteLock();
         readLock = readWriteLock.readLock();
         writeLock = readWriteLock.writeLock();
@@ -89,7 +92,7 @@ public class UnAckedMessageTracker implements Closeable {
             public void run(Timeout t) throws Exception {
                 if (isAckTimeout()) {
                     log.warn("[{}] {} messages have timed-out", consumerBase, oldOpenSet.size());
-                    Set<MessageId> messageIds = new HashSet<>();
+                    Set<MessageIdImpl> messageIds = new HashSet<>();
                     oldOpenSet.forEach(messageIds::add);
                     oldOpenSet.clear();
                     consumerBase.redeliverUnacknowledgedMessages(messageIds);
@@ -103,7 +106,7 @@ public class UnAckedMessageTracker implements Closeable {
     void toggle() {
         writeLock.lock();
         try {
-            ConcurrentOpenHashSet<MessageId> temp = currentSet;
+            ConcurrentOpenHashSet<MessageIdImpl> temp = currentSet;
             currentSet = oldOpenSet;
             oldOpenSet = temp;
         } finally {
@@ -121,7 +124,7 @@ public class UnAckedMessageTracker implements Closeable {
         }
     }
 
-    public boolean add(MessageId m) {
+    public boolean add(MessageIdImpl m) {
         readLock.lock();
         try {
             oldOpenSet.remove(m);
@@ -141,7 +144,7 @@ public class UnAckedMessageTracker implements Closeable {
         }
     }
 
-    public boolean remove(MessageId m) {
+    public boolean remove(MessageIdImpl m) {
         readLock.lock();
         try {
             return currentSet.remove(m) || oldOpenSet.remove(m);
@@ -168,12 +171,15 @@ public class UnAckedMessageTracker implements Closeable {
         }
     }
 
-    public int removeMessagesTill(MessageId msgId) {
+    public int removeMessagesTill(MessageIdImpl msgId) {
         readLock.lock();
         try {
-            int currentSetRemovedMsgCount = currentSet.removeIf(m -> (m.compareTo(msgId) <= 0));
-            int oldSetRemovedMsgCount = oldOpenSet.removeIf(m -> (m.compareTo(msgId) <= 0));
-
+            int currentSetRemovedMsgCount = currentSet.removeIf(m -> ((m.getLedgerId() < msgId.getLedgerId()
+                    || (m.getLedgerId() == msgId.getLedgerId() && m.getEntryId() <= msgId.getEntryId()))
+                    && m.getPartitionIndex() == msgId.getPartitionIndex()));
+            int oldSetRemovedMsgCount = oldOpenSet.removeIf(m -> ((m.getLedgerId() < msgId.getLedgerId()
+                    || (m.getLedgerId() == msgId.getLedgerId() && m.getEntryId() <= msgId.getEntryId()))
+                    && m.getPartitionIndex() == msgId.getPartitionIndex()));
             return currentSetRemovedMsgCount + oldSetRemovedMsgCount;
         } finally {
             readLock.unlock();

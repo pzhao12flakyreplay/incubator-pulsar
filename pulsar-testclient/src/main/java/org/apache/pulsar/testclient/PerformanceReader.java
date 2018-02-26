@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.testclient;
 
-import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 import java.io.FileInputStream;
@@ -37,8 +36,8 @@ import org.apache.pulsar.client.api.ReaderConfiguration;
 import org.apache.pulsar.client.api.ReaderListener;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
-import org.apache.pulsar.common.naming.TopicName;
-import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.client.util.FutureUtil;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,7 +66,7 @@ public class PerformanceReader {
         public List<String> topic;
 
         @Parameter(names = { "-t", "--num-topics" }, description = "Number of topics")
-        public int numTopics = 1;
+        public int numDestinations = 1;
 
         @Parameter(names = { "-r", "--rate" }, description = "Simulate a slow message reader (rate in msg/s)")
         public double rate = 0;
@@ -96,14 +95,6 @@ public class PerformanceReader {
         @Parameter(names = {
                 "--auth-params" }, description = "Authentication parameters, e.g., \"key1:val1,key2:val2\"")
         public String authParams;
-
-        @Parameter(names = {
-                "--use-tls" }, description = "Use TLS encryption on the connection")
-        public boolean useTls;
-
-        @Parameter(names = {
-                "--trust-cert-file" }, description = "Path for the trusted TLS certificate file")
-        public String tlsTrustCertsFilePath = "";
     }
 
     public static void main(String[] args) throws Exception {
@@ -154,14 +145,6 @@ public class PerformanceReader {
             if (arguments.authParams == null) {
                 arguments.authParams = prop.getProperty("authParams", null);
             }
-
-            if (arguments.useTls == false) {
-                arguments.useTls = Boolean.parseBoolean(prop.getProperty("useTls"));
-            }
-
-            if (isBlank(arguments.tlsTrustCertsFilePath)) {
-                arguments.tlsTrustCertsFilePath = prop.getProperty("tlsTrustCertsFilePath", "");
-            }
         }
 
         // Dump config variables
@@ -169,7 +152,7 @@ public class PerformanceReader {
         ObjectWriter w = m.writerWithDefaultPrettyPrinter();
         log.info("Starting Pulsar performance reader with config: {}", w.writeValueAsString(arguments));
 
-        final TopicName prefixTopicName = TopicName.get(arguments.topic.get(0));
+        final DestinationName prefixTopicName = DestinationName.get(arguments.topic.get(0));
 
         final RateLimiter limiter = arguments.rate > 0 ? RateLimiter.create(arguments.rate) : null;
 
@@ -189,8 +172,6 @@ public class PerformanceReader {
         if (isNotBlank(arguments.authPluginClassName)) {
             clientConf.setAuthentication(arguments.authPluginClassName, arguments.authParams);
         }
-        clientConf.setUseTls(arguments.useTls);
-        clientConf.setTlsTrustCertsFilePath(arguments.tlsTrustCertsFilePath);
         PulsarClient pulsarClient = new PulsarClientImpl(arguments.serviceURL, clientConf);
 
         List<CompletableFuture<Reader>> futures = Lists.newArrayList();
@@ -208,16 +189,16 @@ public class PerformanceReader {
             startMessageId = new MessageIdImpl(Long.parseLong(parts[0]), Long.parseLong(parts[1]), -1);
         }
 
-        for (int i = 0; i < arguments.numTopics; i++) {
-            final TopicName topicName = (arguments.numTopics == 1) ? prefixTopicName
-                    : TopicName.get(String.format("%s-%d", prefixTopicName, i));
+        for (int i = 0; i < arguments.numDestinations; i++) {
+            final DestinationName destinationName = (arguments.numDestinations == 1) ? prefixTopicName
+                    : DestinationName.get(String.format("%s-%d", prefixTopicName, i));
 
-            futures.add(pulsarClient.createReaderAsync(topicName.toString(), startMessageId, readerConfig));
+            futures.add(pulsarClient.createReaderAsync(destinationName.toString(), startMessageId, readerConfig));
         }
 
         FutureUtil.waitForAll(futures).get();
 
-        log.info("Start reading from {} topics", arguments.numTopics);
+        log.info("Start reading from {} topics", arguments.numDestinations);
 
         long oldTime = System.nanoTime();
 

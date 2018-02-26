@@ -20,29 +20,33 @@ package org.apache.bookkeeper.mledger.impl;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl.createManagedLedgerException;
 import static org.apache.bookkeeper.mledger.util.SafeRun.safeRun;
 
-import com.google.common.collect.Lists;
-import com.google.common.primitives.Longs;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 import java.util.Collection;
 import java.util.List;
+
+import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.ManagedLedgerException.TooManyRequestsException;
 import org.apache.bookkeeper.mledger.util.Pair;
 import org.apache.bookkeeper.mledger.util.RangeCache;
 import org.apache.bookkeeper.mledger.util.RangeCache.Weighter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.Lists;
+import com.google.common.primitives.Longs;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
+
 /**
- * Cache data payload for entries of all ledgers.
+ * Cache data payload for entries of all ledgers
  */
 public class EntryCacheImpl implements EntryCache {
 
@@ -52,12 +56,17 @@ public class EntryCacheImpl implements EntryCache {
 
     private static final double MB = 1024 * 1024;
 
-    private static final Weighter<EntryImpl> entryWeighter = EntryImpl::getLength;
+    private static final Weighter<EntryImpl> entryWeighter = new Weighter<EntryImpl>() {
+        @Override
+        public long getSize(EntryImpl entry) {
+            return entry.getLength();
+        }
+    };
 
     public EntryCacheImpl(EntryCacheManager manager, ManagedLedgerImpl ml) {
         this.manager = manager;
         this.ml = ml;
-        this.entries = new RangeCache<>(entryWeighter);
+        this.entries = new RangeCache<PositionImpl, EntryImpl>(entryWeighter);
 
         if (log.isDebugEnabled()) {
             log.debug("[{}] Initialized managed-ledger entry cache", ml.getName());
@@ -69,7 +78,7 @@ public class EntryCacheImpl implements EntryCache {
         return ml.getName();
     }
 
-    public final static PooledByteBufAllocator ALLOCATOR = new PooledByteBufAllocator(
+    public final static PooledByteBufAllocator allocator = new PooledByteBufAllocator( //
             true, // preferDirect
             0, // nHeapArenas,
             1, // nDirectArena
@@ -77,8 +86,7 @@ public class EntryCacheImpl implements EntryCache {
             11, // maxOrder
             64, // tinyCacheSize
             32, // smallCacheSize
-            8, // normalCacheSize,
-            true // Use cache for all threads
+            8 // normalCacheSize
     );
 
     @Override
@@ -102,7 +110,7 @@ public class EntryCacheImpl implements EntryCache {
         int size = entry.getLength();
         ByteBuf cachedData = null;
         try {
-            cachedData = ALLOCATOR.directBuffer(size, size);
+            cachedData = allocator.directBuffer(size, size);
         } catch (Throwable t) {
             log.warn("[{}] Failed to allocate buffer for entry cache: {}", ml.getName(), t.getMessage(), t);
             return false;
@@ -175,7 +183,7 @@ public class EntryCacheImpl implements EntryCache {
             lh.asyncReadEntries(position.getEntryId(), position.getEntryId(), (rc, ledgerHandle, sequence, obj) -> {
                 if (rc != BKException.Code.OK) {
                     ml.invalidateLedgerHandle(ledgerHandle, rc);
-                    callback.readEntryFailed(createManagedLedgerException(rc), obj);
+                    callback.readEntryFailed(new ManagedLedgerException(BKException.create(rc)), obj);
                     return;
                 }
 
@@ -244,11 +252,11 @@ public class EntryCacheImpl implements EntryCache {
 
                 if (rc != BKException.Code.OK) {
                     if (rc == BKException.Code.TooManyRequestsException) {
-                        callback.readEntriesFailed(createManagedLedgerException(rc), ctx);
+                        callback.readEntriesFailed(new TooManyRequestsException("Too many request error from bookies"),
+                                ctx);
                     } else {
                         ml.invalidateLedgerHandle(lh1, rc);
-                        ManagedLedgerException mlException = createManagedLedgerException(rc);
-                        callback.readEntriesFailed(mlException, ctx);
+                        callback.readEntriesFailed(new ManagedLedgerException(BKException.getMessage(rc)), ctx);
                     }
                     return;
                 }

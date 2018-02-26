@@ -106,23 +106,20 @@ public class PulsarStandaloneStarter {
         }
 
         this.config = PulsarConfigurationLoader.create((new FileInputStream(configFile)), ServiceConfiguration.class);
-
-        String zkServers = "127.0.0.1";
+        PulsarConfigurationLoader.isComplete(config);
+        // Set ZK server's host to localhost
+        config.setZookeeperServers("127.0.0.1:" + zkPort);
+        config.setGlobalZookeeperServers("127.0.0.1:" + zkPort);
 
         if (advertisedAddress != null) {
             // Use advertised address from command line
             config.setAdvertisedAddress(advertisedAddress);
-            zkServers = advertisedAddress;
         } else if (isBlank(config.getAdvertisedAddress())) {
             // Use advertised address as local hostname
             config.setAdvertisedAddress(ServiceConfigurationUtils.unsafeLocalhostResolve());
         } else {
             // Use advertised address from config file
         }
-
-        // Set ZK server's host to localhost
-        config.setZookeeperServers(zkServers + ":" + zkPort);
-        config.setGlobalZookeeperServers(zkServers + ":" + zkPort);
 
         Runtime.getRuntime().addShutdownHook(new Thread() {
             public void run() {
@@ -151,8 +148,8 @@ public class PulsarStandaloneStarter {
 
         if (!onlyBroker) {
             // Start LocalBookKeeper
-            bkEnsemble = new LocalBookkeeperEnsemble(numOfBk, zkPort, bkPort, zkDir, bkDir, wipeData, config.getAdvertisedAddress());
-            bkEnsemble.startStandalone();
+            bkEnsemble = new LocalBookkeeperEnsemble(numOfBk, zkPort, bkPort, zkDir, bkDir, wipeData);
+            bkEnsemble.start();
         }
 
         if (noBroker) {
@@ -161,7 +158,7 @@ public class PulsarStandaloneStarter {
 
         // load aspectj-weaver agent for instrumentation
         AgentLoader.loadAgentClass(Agent.class.getName(), null);
-
+        
         // Start Broker
         broker = new PulsarService(config);
         broker.start();
@@ -169,14 +166,13 @@ public class PulsarStandaloneStarter {
         // Create a sample namespace
         URL webServiceUrl = new URL(
                 String.format("http://%s:%d", config.getAdvertisedAddress(), config.getWebServicePort()));
-        final String brokerServiceUrl = String.format("pulsar://%s:%d", config.getAdvertisedAddress(),
+        String brokerServiceUrl = String.format("pulsar://%s:%d", config.getAdvertisedAddress(),
                 config.getBrokerServicePort());
         admin = new PulsarAdmin(webServiceUrl, config.getBrokerClientAuthenticationPlugin(),
                 config.getBrokerClientAuthenticationParameters());
-        final String property = "sample";
-        final String cluster = config.getClusterName();
-        final String globalCluster = "global";
-        final String namespace = property + "/" + cluster + "/ns1";
+        String property = "sample";
+        String cluster = config.getClusterName();
+        String namespace = property + "/" + cluster + "/ns1";
         try {
             ClusterData clusterData = new ClusterData(webServiceUrl.toString(), null /* serviceUrlTls */,
                     brokerServiceUrl, null /* brokerServiceUrlTls */);
@@ -184,11 +180,6 @@ public class PulsarStandaloneStarter {
                 admin.clusters().createCluster(cluster, clusterData);
             } else {
                 admin.clusters().updateCluster(cluster, clusterData);
-            }
-
-            // Create marker for "global" cluster
-            if (!admin.clusters().getClusters().contains(globalCluster)) {
-                admin.clusters().createCluster(globalCluster, new ClusterData(null, null));
             }
 
             if (!admin.properties().getProperties().contains(property)) {

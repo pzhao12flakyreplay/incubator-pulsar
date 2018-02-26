@@ -115,7 +115,7 @@ commands:
   description: Continuously receive broker data and/or load reports
   options:
   - flags: --connect-string
-    description: A connection string for one or more ZooKeeper servers
+    description: A connection string for one or more brokers
 - name: simulation-client
   description: Run a simulation server acting as a Pulsar client. Uses the client configuration specified in `conf/client.conf`.
 - name: simulation-controller
@@ -131,7 +131,7 @@ commands:
 env_vars:
 - name: PULSAR_LOG_CONF
   description: Log4j configuration file
-  default: conf/log4j2.yaml
+  default: conf/log4j.properties
 - name: PULSAR_CLIENT_CONF
   description: Configuration file for the client
   default: conf/client.conf

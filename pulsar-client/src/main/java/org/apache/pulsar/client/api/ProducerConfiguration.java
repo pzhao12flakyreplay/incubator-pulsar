@@ -22,70 +22,43 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.io.Serializable;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.pulsar.client.api.PulsarClientException.ProducerBusyException;
-import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
+import org.apache.pulsar.client.impl.RoundRobinPartitionMessageRouterImpl;
+import org.apache.pulsar.client.impl.SinglePartitionMessageRouterImpl;
 
-import lombok.EqualsAndHashCode;
+import com.google.common.base.Objects;
 
 /**
  * Producer's configuration
  *
- * @deprecated use {@link PulsarClient#newProducer()} to construct and configure a {@link Producer} instance
  */
-@Deprecated
-@EqualsAndHashCode
 public class ProducerConfiguration implements Serializable {
 
+    /**
+     *
+     */
     private static final long serialVersionUID = 1L;
+    private long sendTimeoutMs = 30000;
+    private boolean blockIfQueueFull = false;
+    private int maxPendingMessages = 1000;
+    private MessageRoutingMode messageRouteMode = MessageRoutingMode.SinglePartition;
+    private MessageRouter customMessageRouter = null;
+    private long batchingMaxPublishDelayMs = 10;
+    private int batchingMaxMessages = 1000;
+    private boolean batchingEnabled = false; // disabled by default
 
-    private final ProducerConfigurationData conf = new ProducerConfigurationData();
+    private CompressionType compressionType = CompressionType.NONE;
 
     public enum MessageRoutingMode {
         SinglePartition, RoundRobinPartition, CustomPartition
-    }
-
-    public enum HashingScheme {
-        JavaStringHash, Murmur3_32Hash
-    }
-
-    /**
-     * @return the configured custom producer name or null if no custom name was specified
-     * @since 1.20.0
-     */
-    public String getProducerName() {
-        return conf.getProducerName();
-    }
-
-    /**
-     * Specify a name for the producer
-     * <p>
-     * If not assigned, the system will generate a globally unique name which can be access with
-     * {@link Producer#getProducerName()}.
-     * <p>
-     * When specifying a name, it is app to the user to ensure that, for a given topic, the producer name is unique
-     * across all Pulsar's clusters.
-     * <p>
-     * If a producer with the same name is already connected to a particular topic, the
-     * {@link PulsarClient#createProducer(String)} operation will fail with {@link ProducerBusyException}.
-     *
-     * @param producerName
-     *            the custom name to use for the producer
-     * @since 1.20.0
-     */
-    public void setProducerName(String producerName) {
-        conf.setProducerName(producerName);
     }
 
     /**
      * @return the message send timeout in ms
      */
     public long getSendTimeoutMs() {
-        return conf.getSendTimeoutMs();
+        return sendTimeoutMs;
     }
 
     /**
@@ -100,7 +73,7 @@ public class ProducerConfiguration implements Serializable {
      */
     public ProducerConfiguration setSendTimeout(int sendTimeout, TimeUnit unit) {
         checkArgument(sendTimeout >= 0);
-        conf.setSendTimeoutMs(unit.toMillis(sendTimeout));
+        this.sendTimeoutMs = unit.toMillis(sendTimeout);
         return this;
     }
 
@@ -108,52 +81,22 @@ public class ProducerConfiguration implements Serializable {
      * @return the maximum number of messages allowed in the outstanding messages queue for the producer
      */
     public int getMaxPendingMessages() {
-        return conf.getMaxPendingMessages();
+        return maxPendingMessages;
     }
 
     /**
      * Set the max size of the queue holding the messages pending to receive an acknowledgment from the broker.
      * <p>
-     * When the queue is full, by default, all calls to {@link Producer#send} and {@link Producer#sendAsync} will fail
-     * unless blockIfQueueFull is set to true. Use {@link #setBlockIfQueueFull} to change the blocking behavior.
+     * When the queue is full, by default, all calls to {@link Producer#send} and {@link Producer#sendAsync}
+     * will fail unless blockIfQueueFull is set to true. Use {@link #setBlockIfQueueFull} to change the blocking behavior.
      *
      * @param maxPendingMessages
      * @return
      */
     public ProducerConfiguration setMaxPendingMessages(int maxPendingMessages) {
         checkArgument(maxPendingMessages > 0);
-        conf.setMaxPendingMessages(maxPendingMessages);
+        this.maxPendingMessages = maxPendingMessages;
         return this;
-    }
-
-    public HashingScheme getHashingScheme() {
-        return HashingScheme.valueOf(conf.getHashingScheme().toString());
-    }
-
-    public ProducerConfiguration setHashingScheme(HashingScheme hashingScheme) {
-        conf.setHashingScheme(org.apache.pulsar.client.api.HashingScheme.valueOf(hashingScheme.toString()));
-        return this;
-    }
-
-    /**
-     *
-     * @return the maximum number of pending messages allowed across all the partitions
-     */
-    public int getMaxPendingMessagesAcrossPartitions() {
-        return conf.getMaxPendingMessagesAcrossPartitions();
-    }
-
-    /**
-     * Set the number of max pending messages across all the partitions
-     * <p>
-     * This setting will be used to lower the max pending messages for each partition
-     * ({@link #setMaxPendingMessages(int)}), if the total exceeds the configured value.
-     *
-     * @param maxPendingMessagesAcrossPartitions
-     */
-    public void setMaxPendingMessagesAcrossPartitions(int maxPendingMessagesAcrossPartitions) {
-        checkArgument(maxPendingMessagesAcrossPartitions >= conf.getMaxPendingMessages());
-        conf.setMaxPendingMessagesAcrossPartitions(maxPendingMessagesAcrossPartitions);
     }
 
     /**
@@ -162,7 +105,7 @@ public class ProducerConfiguration implements Serializable {
      *         pending queue is full
      */
     public boolean getBlockIfQueueFull() {
-        return conf.isBlockIfQueueFull();
+        return blockIfQueueFull;
     }
 
     /**
@@ -170,14 +113,14 @@ public class ProducerConfiguration implements Serializable {
      * message queue is full.
      * <p>
      * Default is <code>false</code>. If set to <code>false</code>, send operations will immediately fail with
-     * {@link PulsarClientException.ProducerQueueIsFullError} when there is no space left in pending queue.
+     * {@link ProducerQueueIsFullError} when there is no space left in pending queue.
      *
      * @param blockIfQueueFull
      *            whether to block {@link Producer#send} and {@link Producer#sendAsync} operations on queue full
      * @return
      */
     public ProducerConfiguration setBlockIfQueueFull(boolean blockIfQueueFull) {
-        conf.setBlockIfQueueFull(blockIfQueueFull);
+        this.blockIfQueueFull = blockIfQueueFull;
         return this;
     }
 
@@ -189,8 +132,7 @@ public class ProducerConfiguration implements Serializable {
      */
     public ProducerConfiguration setMessageRoutingMode(MessageRoutingMode messageRouteMode) {
         checkNotNull(messageRouteMode);
-        conf.setMessageRoutingMode(
-                org.apache.pulsar.client.api.MessageRoutingMode.valueOf(messageRouteMode.toString()));
+        this.messageRouteMode = messageRouteMode;
         return this;
     }
 
@@ -200,7 +142,7 @@ public class ProducerConfiguration implements Serializable {
      * @return
      */
     public MessageRoutingMode getMessageRoutingMode() {
-        return MessageRoutingMode.valueOf(conf.getMessageRoutingMode().toString());
+        return messageRouteMode;
     }
 
     /**
@@ -220,7 +162,7 @@ public class ProducerConfiguration implements Serializable {
      *        compress messages.
      */
     public ProducerConfiguration setCompressionType(CompressionType compressionType) {
-        conf.setCompressionType(compressionType);
+        this.compressionType = compressionType;
         return this;
     }
 
@@ -228,7 +170,7 @@ public class ProducerConfiguration implements Serializable {
      * @return the configured compression type for this producer
      */
     public CompressionType getCompressionType() {
-        return conf.getCompressionType();
+        return compressionType;
     }
 
     /**
@@ -240,30 +182,32 @@ public class ProducerConfiguration implements Serializable {
     public ProducerConfiguration setMessageRouter(MessageRouter messageRouter) {
         checkNotNull(messageRouter);
         setMessageRoutingMode(MessageRoutingMode.CustomPartition);
-        conf.setCustomMessageRouter(messageRouter);
+        customMessageRouter = messageRouter;
         return this;
     }
 
     /**
-     * Get the message router set by {@link #setMessageRouter(MessageRouter)}.
+     * Get the message router object
      *
-     * @return message router.
-     * @deprecated since 1.22.0-incubating. <tt>numPartitions</tt> is already passed as parameter in
-     *             {@link MessageRouter#choosePartition(Message, TopicMetadata)}.
-     * @see MessageRouter
+     * @return
      */
-    @Deprecated
     public MessageRouter getMessageRouter(int numPartitions) {
-        return conf.getCustomMessageRouter();
-    }
+        MessageRouter messageRouter;
 
-    /**
-     * Get the message router set by {@link #setMessageRouter(MessageRouter)}.
-     *
-     * @return message router set by {@link #setMessageRouter(MessageRouter)}.
-     */
-    public MessageRouter getMessageRouter() {
-        return conf.getCustomMessageRouter();
+        switch (messageRouteMode) {
+        case CustomPartition:
+            checkNotNull(customMessageRouter);
+            messageRouter = customMessageRouter;
+            break;
+        case RoundRobinPartition:
+            messageRouter = new RoundRobinPartitionMessageRouterImpl(numPartitions);
+            break;
+        case SinglePartition:
+        default:
+            messageRouter = new SinglePartitionMessageRouterImpl(numPartitions);
+        }
+
+        return messageRouter;
     }
 
     /**
@@ -271,7 +215,7 @@ public class ProducerConfiguration implements Serializable {
      */
 
     public boolean getBatchingEnabled() {
-        return conf.isBatchingEnabled();
+        return batchingEnabled;
     }
 
     /**
@@ -283,7 +227,7 @@ public class ProducerConfiguration implements Serializable {
      * contents.
      *
      * When enabled default batch delay is set to 10 ms and default batch size is 1000 messages
-     *
+     * 
      * @see ProducerConfiguration#setBatchingMaxPublishDelay(long, TimeUnit)
      * @since 1.0.36 <br>
      *        Make sure all the consumer applications have been updated to use this client version, before starting to
@@ -291,94 +235,23 @@ public class ProducerConfiguration implements Serializable {
      */
 
     public ProducerConfiguration setBatchingEnabled(boolean batchMessagesEnabled) {
-        conf.setBatchingEnabled(batchMessagesEnabled);
+        this.batchingEnabled = batchMessagesEnabled;
         return this;
     }
 
     /**
-     * @return the CryptoKeyReader
-     */
-    public CryptoKeyReader getCryptoKeyReader() {
-        return conf.getCryptoKeyReader();
-    }
-
-    /**
-     * Sets a {@link CryptoKeyReader}
-     *
-     * @param cryptoKeyReader
-     *            CryptoKeyReader object
-     */
-    public ProducerConfiguration setCryptoKeyReader(CryptoKeyReader cryptoKeyReader) {
-        checkNotNull(cryptoKeyReader);
-        conf.setCryptoKeyReader(cryptoKeyReader);
-        return this;
-    }
-
-    /**
-     *
-     * @return encryptionKeys
-     *
-     */
-    public Set<String> getEncryptionKeys() {
-        return conf.getEncryptionKeys();
-    }
-
-    /**
-     *
-     * Returns true if encryption keys are added
-     *
-     */
-    public boolean isEncryptionEnabled() {
-        return conf.isEncryptionEnabled();
-    }
-
-    /**
-     * Add public encryption key, used by producer to encrypt the data key.
-     *
-     * At the time of producer creation, Pulsar client checks if there are keys added to encryptionKeys. If keys are
-     * found, a callback getKey(String keyName) is invoked against each key to load the values of the key. Application
-     * should implement this callback to return the key in pkcs8 format. If compression is enabled, message is encrypted
-     * after compression. If batch messaging is enabled, the batched message is encrypted.
-     *
-     */
-    public void addEncryptionKey(String key) {
-        conf.getEncryptionKeys().add(key);
-    }
-
-    public void removeEncryptionKey(String key) {
-        conf.getEncryptionKeys().remove(key);
-    }
-
-    /**
-     * Sets the ProducerCryptoFailureAction to the value specified
-     *
-     * @param action
-     *            The producer action
-     */
-    public void setCryptoFailureAction(ProducerCryptoFailureAction action) {
-        conf.setCryptoFailureAction(action);
-    }
-
-    /**
-     * @return The ProducerCryptoFailureAction
-     */
-    public ProducerCryptoFailureAction getCryptoFailureAction() {
-        return conf.getCryptoFailureAction();
-    }
-
-    /**
-     *
+     * 
      * @return the batch time period in ms.
      * @see ProducerConfiguration#setBatchingMaxPublishDelay(long, TimeUnit)
      */
     public long getBatchingMaxPublishDelayMs() {
-        return TimeUnit.MICROSECONDS.toMillis(conf.getBatchingMaxPublishDelayMicros());
+        return batchingMaxPublishDelayMs;
     }
 
     /**
      * Set the time period within which the messages sent will be batched <i>default: 10ms</i> if batch messages are
      * enabled. If set to a non zero value, messages will be queued until this time interval or until
-     *
+     * 
      * @see ProducerConfiguration#batchingMaxMessages threshold is reached; all messages will be published as a single
      *      batch message. The consumer will be delivered individual messages in the batch in the same order they were
      *      enqueued
@@ -394,22 +267,22 @@ public class ProducerConfiguration implements Serializable {
     public ProducerConfiguration setBatchingMaxPublishDelay(long batchDelay, TimeUnit timeUnit) {
         long delayInMs = timeUnit.toMillis(batchDelay);
         checkArgument(delayInMs >= 1, "configured value for batch delay must be at least 1ms");
-        conf.setBatchingMaxPublishDelayMicros(timeUnit.toMicros(batchDelay));
+        this.batchingMaxPublishDelayMs = delayInMs;
         return this;
     }
 
     /**
-     *
+     * 
      * @return the maximum number of messages permitted in a batch.
      */
     public int getBatchingMaxMessages() {
-        return conf.getBatchingMaxMessages();
+        return batchingMaxMessages;
     }
 
     /**
      * Set the maximum number of messages permitted in a batch. <i>default: 1000</i> If set to a value greater than 1,
      * messages will be queued until this threshold is reached or batch interval has elapsed
-     *
+     * 
      * @see ProducerConfiguration#setBatchingMaxPublishDelay(long, TimeUnit) All messages in batch will be published as
      *      a single batch message. The consumer will be delivered individual messages in the batch in the same order
      *      they were enqueued
@@ -419,58 +292,19 @@ public class ProducerConfiguration implements Serializable {
      */
     public ProducerConfiguration setBatchingMaxMessages(int batchMessagesMaxMessagesPerBatch) {
         checkArgument(batchMessagesMaxMessagesPerBatch > 0);
-        conf.setBatchingMaxMessages(batchMessagesMaxMessagesPerBatch);
+        this.batchingMaxMessages = batchMessagesMaxMessagesPerBatch;
         return this;
     }
 
-    public Optional<Long> getInitialSequenceId() {
-        return Optional.ofNullable(conf.getInitialSequenceId());
-    }
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof ProducerConfiguration) {
+            ProducerConfiguration other = (ProducerConfiguration) obj;
+            return Objects.equal(this.sendTimeoutMs, other.sendTimeoutMs)
+                    && Objects.equal(maxPendingMessages, other.maxPendingMessages)
+                    && Objects.equal(this.messageRouteMode, other.messageRouteMode);
+        }
 
-    /**
-     * Set the baseline for the sequence ids for messages published by the producer.
-     * <p>
-     * First message will be using (initialSequenceId + 1) as its sequence id and subsequent messages will be assigned
-     * incremental sequence ids, if not otherwise specified.
-     *
-     * @param initialSequenceId
-     * @return
-     */
-    public ProducerConfiguration setInitialSequenceId(long initialSequenceId) {
-        conf.setInitialSequenceId(initialSequenceId);
-        return this;
-    }
-
-    /**
-     * Set a name/value property with this producer.
-     *
-     * @param key
-     * @param value
-     * @return
-     */
-    public ProducerConfiguration setProperty(String key, String value) {
-        checkArgument(key != null);
-        checkArgument(value != null);
-        conf.getProperties().put(key, value);
-        return this;
-    }
-
-    /**
-     * Add all the properties in the provided map
-     *
-     * @param properties
-     * @return
-     */
-    public ProducerConfiguration setProperties(Map<String, String> properties) {
-        conf.getProperties().putAll(properties);
-        return this;
-    }
-
-    public Map<String, String> getProperties() {
-        return conf.getProperties();
-    }
-
-    public ProducerConfigurationData getProducerConfigurationData() {
-        return conf;
+        return false;
     }
 }

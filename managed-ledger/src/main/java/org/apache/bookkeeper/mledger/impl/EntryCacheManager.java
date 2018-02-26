@@ -18,19 +18,15 @@
  */
 package org.apache.bookkeeper.mledger.impl;
 
-import static org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl.createManagedLedgerException;
 import static org.apache.bookkeeper.mledger.util.SafeRun.safeRun;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.primitives.Longs;
-import io.netty.buffer.ByteBuf;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+
 import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -38,11 +34,15 @@ import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.util.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@SuppressWarnings("checkstyle:javadoctype")
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.primitives.Longs;
+
 public class EntryCacheManager {
 
     private final long maxSize;
@@ -195,7 +195,7 @@ public class EntryCacheManager {
             lh.asyncReadEntries(firstEntry, lastEntry, new ReadCallback() {
                 public void readComplete(int rc, LedgerHandle lh, Enumeration<LedgerEntry> seq, Object bkctx) {
                     if (rc != BKException.Code.OK) {
-                        callback.readEntriesFailed(createManagedLedgerException(rc), ctx);
+                        callback.readEntriesFailed(new ManagedLedgerException(BKException.create(rc)), ctx);
                         return;
                     }
 
@@ -234,10 +234,6 @@ public class EntryCacheManager {
             return Longs.compare(getSize(), other.getSize());
         }
 
-    }
-
-    public static Entry create(long ledgerId, long entryId, ByteBuf data) {
-        return EntryImpl.create(ledgerId, entryId, data);
     }
 
     private static final Logger log = LoggerFactory.getLogger(EntryCacheManager.class);

@@ -22,30 +22,26 @@
 #include <lib/LookupDataResult.h>
 #include <pulsar/Result.h>
 #include <lib/Future.h>
+#include <lib/DestinationName.h>
 #include <lib/LogUtils.h>
-#include <lib/TopicName.h>
 
 namespace pulsar {
 class LookupService {
-   public:
+public:
     /*
-     * @param    topicName - topic name
+     * @param    destinationName - topic name
      *
-     * Looks up the owner broker for the given topic name
+     * Looks up the owner broker for the given destination name
      */
-    virtual Future<Result, LookupDataResultPtr> lookupAsync(const std::string& topicName) = 0;
+    virtual Future<Result, LookupDataResultPtr> lookupAsync(const std::string& destinationName) = 0;
 
     /*
-     * @param    topicName - pointer to topic name
+     * @param    dn - pointer to destination (topic) name
      *
      * Gets Partition metadata
      */
-    virtual Future<Result, LookupDataResultPtr> getPartitionMetadataAsync(const TopicNamePtr& topicName) = 0;
-
-    virtual ~LookupService() {}
+    virtual Future<Result, LookupDataResultPtr> getPartitionMetadataAsync(const DestinationNamePtr& dn) = 0;
 };
-
 typedef boost::shared_ptr<LookupService> LookupServicePtr;
-
-}  // namespace pulsar
-#endif  // PULSAR_CPP_LOOKUPSERVICE_H
+}
+#endif //PULSAR_CPP_LOOKUPSERVICE_H

@@ -21,7 +21,6 @@ package org.apache.pulsar.client.admin.internal;
 import static com.google.common.base.Preconditions.checkArgument;
 
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -49,11 +48,7 @@ import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.client.impl.MessageImpl;
-import org.apache.pulsar.common.api.Commands;
-import org.apache.pulsar.common.api.proto.PulsarApi;
-import org.apache.pulsar.common.api.proto.PulsarApi.KeyValue;
-import org.apache.pulsar.common.api.proto.PulsarApi.SingleMessageMetadata;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.AuthAction;
@@ -70,12 +65,9 @@ import com.google.common.collect.Maps;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-
 public class PersistentTopicsImpl extends BaseResource implements PersistentTopics {
     private final WebTarget persistentTopics;
-    private final String BATCH_HEADER = "X-Pulsar-num-batch-message";
+
     public PersistentTopicsImpl(WebTarget web, Authentication auth) {
         super(auth);
         this.persistentTopics = web.path("/persistent");
@@ -85,7 +77,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     @Override
     public List<String> getList(String namespace) throws PulsarAdminException {
         try {
-            NamespaceName ns = NamespaceName.get(namespace);
+            NamespaceName ns = new NamespaceName(namespace);
             return request(persistentTopics.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName())).get(
                     new GenericType<List<String>>() {
                     });
@@ -97,7 +89,7 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     @Override
     public List<String> getPartitionedTopicList(String namespace) throws PulsarAdminException {
         try {
-            NamespaceName ns = NamespaceName.get(namespace);
+            NamespaceName ns = new NamespaceName(namespace);
             return request(persistentTopics.path(ns.getProperty()).path(ns.getCluster()).path(ns.getLocalName()).path("partitioned")).get(
                     new GenericType<List<String>>() {
                     });
@@ -107,9 +99,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public Map<String, Set<AuthAction>> getPermissions(String topic) throws PulsarAdminException {
+    public Map<String, Set<AuthAction>> getPermissions(String destination) throws PulsarAdminException {
         try {
-            TopicName ds = TopicName.get(topic);
+            DestinationName ds = DestinationName.get(destination);
             return request(persistentTopics.path(ds.getNamespace()).path(ds.getLocalName()).path("permissions")).get(
                     new GenericType<Map<String, Set<AuthAction>>>() {
                     });
@@ -119,9 +111,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void grantPermission(String topic, String role, Set<AuthAction> actions) throws PulsarAdminException {
+    public void grantPermission(String destination, String role, Set<AuthAction> actions) throws PulsarAdminException {
         try {
-            TopicName ds = TopicName.get(topic);
+            DestinationName ds = DestinationName.get(destination);
             request(persistentTopics.path(ds.getNamespace()).path(ds.getLocalName()).path("permissions").path(role))
                     .post(Entity.entity(actions, MediaType.APPLICATION_JSON), ErrorData.class);
         } catch (Exception e) {
@@ -130,9 +122,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void revokePermissions(String topic, String role) throws PulsarAdminException {
+    public void revokePermissions(String destination, String role) throws PulsarAdminException {
         try {
-            TopicName ds = TopicName.get(topic);
+            DestinationName ds = DestinationName.get(destination);
             request(persistentTopics.path(ds.getNamespace()).path(ds.getLocalName()).path("permissions").path(role))
                     .delete(ErrorData.class);
         } catch (Exception e) {
@@ -141,9 +133,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void createPartitionedTopic(String topic, int numPartitions) throws PulsarAdminException {
+    public void createPartitionedTopic(String destination, int numPartitions) throws PulsarAdminException {
         try {
-            createPartitionedTopicAsync(topic, numPartitions).get();
+            createPartitionedTopicAsync(destination, numPartitions).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -153,18 +145,18 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> createPartitionedTopicAsync(String topic, int numPartitions) {
+    public CompletableFuture<Void> createPartitionedTopicAsync(String destination, int numPartitions) {
         checkArgument(numPartitions > 1, "Number of partitions should be more than 1");
-        TopicName ds = validateTopic(topic);
+        DestinationName ds = validateTopic(destination);
         return asyncPutRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitions"),
                 Entity.entity(numPartitions, MediaType.APPLICATION_JSON));
     }
 
     @Override
-    public void updatePartitionedTopic(String topic, int numPartitions) throws PulsarAdminException {
+    public void updatePartitionedTopic(String destination, int numPartitions) throws PulsarAdminException {
         try {
-            updatePartitionedTopicAsync(topic, numPartitions).get();
+            updatePartitionedTopicAsync(destination, numPartitions).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -174,18 +166,18 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> updatePartitionedTopicAsync(String topic, int numPartitions) {
+    public CompletableFuture<Void> updatePartitionedTopicAsync(String destination, int numPartitions) {
         checkArgument(numPartitions > 1, "Number of partitions must be more than 1");
-        TopicName ds = validateTopic(topic);
+        DestinationName ds = validateTopic(destination);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitions"),
                 Entity.entity(numPartitions, MediaType.APPLICATION_JSON));
     }
-
+    
     @Override
-    public PartitionedTopicMetadata getPartitionedTopicMetadata(String topic) throws PulsarAdminException {
+    public PartitionedTopicMetadata getPartitionedTopicMetadata(String destination) throws PulsarAdminException {
         try {
-            return getPartitionedTopicMetadataAsync(topic).get();
+            return getPartitionedTopicMetadataAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -195,8 +187,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadataAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadataAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<PartitionedTopicMetadata> future = new CompletableFuture<>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitions"),
                 new InvocationCallback<PartitionedTopicMetadata>() {
@@ -215,9 +207,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void deletePartitionedTopic(String topic) throws PulsarAdminException {
+    public void deletePartitionedTopic(String destination) throws PulsarAdminException {
         try {
-            deletePartitionedTopicAsync(topic).get();
+            deletePartitionedTopicAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -227,16 +219,16 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> deletePartitionedTopicAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> deletePartitionedTopicAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
                 .path("partitions"));
     }
 
     @Override
-    public void delete(String topic) throws PulsarAdminException {
+    public void delete(String destination) throws PulsarAdminException {
         try {
-            deleteAsync(topic).get();
+            deleteAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -246,15 +238,15 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> deleteAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> deleteAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()));
     }
 
     @Override
-    public void unload(String topic) throws PulsarAdminException {
+    public List<String> getSubscriptions(String destination) throws PulsarAdminException {
         try {
-            unloadAsync(topic).get();
+            return getSubscriptionsAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -264,27 +256,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> unloadAsync(String topic) {
-        TopicName ds = validateTopic(topic);
-        return asyncPutRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("unload"),
-                Entity.entity("", MediaType.APPLICATION_JSON));
-    }
-
-    @Override
-    public List<String> getSubscriptions(String topic) throws PulsarAdminException {
-        try {
-            return getSubscriptionsAsync(topic).get();
-        } catch (ExecutionException e) {
-            throw (PulsarAdminException) e.getCause();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new PulsarAdminException(e.getCause());
-        }
-    }
-
-    @Override
-    public CompletableFuture<List<String>> getSubscriptionsAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<List<String>> getSubscriptionsAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<List<String>> future = new CompletableFuture<>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscriptions"),
                 new InvocationCallback<List<String>>() {
@@ -303,9 +276,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public PersistentTopicStats getStats(String topic) throws PulsarAdminException {
+    public PersistentTopicStats getStats(String destination) throws PulsarAdminException {
         try {
-            return getStatsAsync(topic).get();
+            return getStatsAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -315,8 +288,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<PersistentTopicStats> getStatsAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<PersistentTopicStats> getStatsAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<PersistentTopicStats> future = new CompletableFuture<>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("stats"),
                 new InvocationCallback<PersistentTopicStats>() {
@@ -335,9 +308,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public PersistentTopicInternalStats getInternalStats(String topic) throws PulsarAdminException {
+    public PersistentTopicInternalStats getInternalStats(String destination) throws PulsarAdminException {
         try {
-            return getInternalStatsAsync(topic).get();
+            return getInternalStatsAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -347,8 +320,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<PersistentTopicInternalStats> getInternalStatsAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<PersistentTopicInternalStats> getInternalStatsAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<PersistentTopicInternalStats> future = new CompletableFuture<>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("internalStats"),
                 new InvocationCallback<PersistentTopicInternalStats>() {
@@ -367,9 +340,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public JsonObject getInternalInfo(String topic) throws PulsarAdminException {
+    public JsonObject getInternalInfo(String destination) throws PulsarAdminException {
         try {
-            return getInternalInfoAsync(topic).get();
+            return getInternalInfoAsync(destination).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -379,8 +352,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<JsonObject> getInternalInfoAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<JsonObject> getInternalInfoAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<JsonObject> future = new CompletableFuture<>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("internal-info"),
                 new InvocationCallback<String>() {
@@ -399,10 +372,10 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public PartitionedTopicStats getPartitionedStats(String topic, boolean perPartition)
+    public PartitionedTopicStats getPartitionedStats(String destination, boolean perPartition)
             throws PulsarAdminException {
         try {
-            return getPartitionedStatsAsync(topic, perPartition).get();
+            return getPartitionedStatsAsync(destination, perPartition).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -412,9 +385,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<PartitionedTopicStats> getPartitionedStatsAsync(String topic,
+    public CompletableFuture<PartitionedTopicStats> getPartitionedStatsAsync(String destination,
             boolean perPartition) {
-        TopicName ds = validateTopic(topic);
+        DestinationName ds = validateTopic(destination);
         final CompletableFuture<PartitionedTopicStats> future = new CompletableFuture<>();
         asyncGetRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("partitioned-stats"),
@@ -437,9 +410,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void deleteSubscription(String topic, String subName) throws PulsarAdminException {
+    public void deleteSubscription(String destination, String subName) throws PulsarAdminException {
         try {
-            deleteSubscriptionAsync(topic, subName).get();
+            deleteSubscriptionAsync(destination, subName).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -449,17 +422,17 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> deleteSubscriptionAsync(String topic, String subName) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> deleteSubscriptionAsync(String destination, String subName) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncDeleteRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
                 .path("subscription").path(encodedSubName));
     }
 
     @Override
-    public void skipAllMessages(String topic, String subName) throws PulsarAdminException {
+    public void skipAllMessages(String destination, String subName) throws PulsarAdminException {
         try {
-            skipAllMessagesAsync(topic, subName).get();
+            skipAllMessagesAsync(destination, subName).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -469,8 +442,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> skipAllMessagesAsync(String topic, String subName) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> skipAllMessagesAsync(String destination, String subName) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
@@ -478,9 +451,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void skipMessages(String topic, String subName, long numMessages) throws PulsarAdminException {
+    public void skipMessages(String destination, String subName, long numMessages) throws PulsarAdminException {
         try {
-            skipMessagesAsync(topic, subName, numMessages).get();
+            skipMessagesAsync(destination, subName, numMessages).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -490,8 +463,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> skipMessagesAsync(String topic, String subName, long numMessages) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> skipMessagesAsync(String destination, String subName, long numMessages) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
@@ -500,9 +473,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void expireMessages(String topic, String subName, long expireTimeInSeconds) throws PulsarAdminException {
+    public void expireMessages(String destination, String subName, long expireTimeInSeconds) throws PulsarAdminException {
         try {
-            expireMessagesAsync(topic, subName, expireTimeInSeconds).get();
+            expireMessagesAsync(destination, subName, expireTimeInSeconds).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -512,8 +485,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> expireMessagesAsync(String topic, String subName, long expireTimeInSeconds) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> expireMessagesAsync(String destination, String subName, long expireTimeInSeconds) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
@@ -522,9 +495,9 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void expireMessagesForAllSubscriptions(String topic, long expireTimeInSeconds) throws PulsarAdminException {
+    public void expireMessagesForAllSubscriptions(String destination, long expireTimeInSeconds) throws PulsarAdminException {
         try {
-            expireMessagesForAllSubscriptionsAsync(topic, expireTimeInSeconds).get();
+            expireMessagesForAllSubscriptionsAsync(destination, expireTimeInSeconds).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -534,18 +507,18 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> expireMessagesForAllSubscriptionsAsync(String topic, long expireTimeInSeconds) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> expireMessagesForAllSubscriptionsAsync(String destination, long expireTimeInSeconds) {
+        DestinationName ds = validateTopic(destination);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("all_subscription")
                         .path("expireMessages").path(String.valueOf(expireTimeInSeconds)),
                 Entity.entity("", MediaType.APPLICATION_JSON));
     }
 
-    private CompletableFuture<List<Message>> peekNthMessage(String topic, String subName, int messagePosition) {
-        TopicName ds = validateTopic(topic);
+    private CompletableFuture<Message> peekNthMessage(String destination, String subName, int messagePosition) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
-        final CompletableFuture<List<Message>> future = new CompletableFuture<List<Message>>();
+        final CompletableFuture<Message> future = new CompletableFuture<Message>();
         asyncGetRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
                 .path(encodedSubName).path("position").path(String.valueOf(messagePosition)),
                 new InvocationCallback<Response>() {
@@ -553,7 +526,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
                     @Override
                     public void completed(Response response) {
                         try {
-                            future.complete(getMessageFromHttpResponse(response));
+                            Message msg = getMessageFromHttpResponse(response);
+                            future.complete(msg);
                         } catch (Exception e) {
                             future.completeExceptionally(getApiException(e));
                         }
@@ -568,9 +542,10 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public List<Message> peekMessages(String topic, String subName, int numMessages) throws PulsarAdminException {
+    public List<Message> peekMessages(String destination, String subName, int numMessages) throws PulsarAdminException {
+
         try {
-            return peekMessagesAsync(topic, subName, numMessages).get();
+            return peekMessagesAsync(destination, subName, numMessages).get();
         } catch (ExecutionException e) {
             throw (PulsarAdminException) e.getCause();
         } catch (InterruptedException e) {
@@ -580,68 +555,47 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<List<Message>> peekMessagesAsync(String topic, String subName, int numMessages) {
+    public CompletableFuture<List<Message>> peekMessagesAsync(String destination, String subName, int numMessages) {
         checkArgument(numMessages > 0);
-        CompletableFuture<List<Message>> future = new CompletableFuture<List<Message>>();
-        peekMessagesAsync(topic, subName, numMessages, Lists.newArrayList(), future, 1);
-        return future;
-    }
-
-
-    private void peekMessagesAsync(String topic, String subName, int numMessages,
-            List<Message> messages, CompletableFuture<List<Message>> future, int nthMessage) {
-        if (numMessages <= 0) {
-            future.complete(messages);
-            return;
-        }
+        List<Message> messages = Lists.newArrayList();
+        CompletableFuture<List<Message>> futures = new CompletableFuture<List<Message>>();
 
         // if peeking first message succeeds, we know that the topic and subscription exists
-        peekNthMessage(topic, subName, nthMessage).handle((r, ex) -> {
+        peekNthMessage(destination, subName, 1).handle((r, ex) -> {
             if (ex != null) {
-                // if we get a not found exception, it means that the position for the message we are trying to get
-                // does not exist. At this point, we can return the already found messages.
-                if (ex instanceof NotFoundException) {
-                    log.warn("Exception '{}' occured while trying to peek Messages.", ex.getMessage());
-                    future.complete(messages);
-                } else {
-                    future.completeExceptionally(ex);
+                futures.completeExceptionally(ex);
+            } else {
+                messages.add(r);
+                List<CompletableFuture<Message>> futureMessages = Lists.newArrayList();
+                for (int i = 2; i <= numMessages; i++) {
+                    futureMessages.add(peekNthMessage(destination, subName, i));
                 }
-                return null;
-            }
-            for (int i = 0; i < Math.min(r.size(), numMessages); i++) {
-                messages.add(r.get(i));
-            }
-            peekMessagesAsync(topic, subName, numMessages - r.size(), messages, future, nthMessage + 1);
-            return null;
-        });
-    }
 
-    @Override
-    public void createSubscription(String topic, String subscriptionName, MessageId messageId)
-            throws PulsarAdminException {
-        try {
-            TopicName ds = validateTopic(topic);
-            String encodedSubName = Codec.encode(subscriptionName);
-            request(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
-                    .path(encodedSubName)).put(Entity.entity(messageId, MediaType.APPLICATION_JSON), ErrorData.class);
-        } catch (Exception e) {
-            throw getApiException(e);
+                try {
+                    for (CompletableFuture<Message> futureMessage : futureMessages) {
+                        messages.add(futureMessage.get());
+                    }
+                } catch (Exception e) {
+                    // if we get a not found exception, it means that the position for the message we are trying to get
+                    // does not exist. At this point, we can return the already found messages.
+                if (!(e.getCause() instanceof NotFoundException)) {
+                    futures.completeExceptionally(e.getCause());
+                    return null;
+                }
+            }
+
+            futures.complete(messages);
         }
+        return null;
+    }   );
+
+        return futures;
     }
 
     @Override
-    public CompletableFuture<Void> createSubscriptionAsync(String topic, String subscriptionName,
-            MessageId messageId) {
-        TopicName ds = validateTopic(topic);
-        String encodedSubName = Codec.encode(subscriptionName);
-        return asyncPutRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
-                .path("subscription").path(encodedSubName), Entity.entity(messageId, MediaType.APPLICATION_JSON));
-    }
-
-    @Override
-    public void resetCursor(String topic, String subName, long timestamp) throws PulsarAdminException {
+    public void resetCursor(String destination, String subName, long timestamp) throws PulsarAdminException {
         try {
-            TopicName ds = validateTopic(topic);
+            DestinationName ds = validateTopic(destination);
             String encodedSubName = Codec.encode(subName);
             request(
                     persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
@@ -653,8 +607,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public CompletableFuture<Void> resetCursorAsync(String topic, String subName, long timestamp) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<Void> resetCursorAsync(String destination, String subName, long timestamp) {
+        DestinationName ds = validateTopic(destination);
         String encodedSubName = Codec.encode(subName);
         return asyncPostRequest(
                 persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
@@ -663,30 +617,8 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     @Override
-    public void resetCursor(String topic, String subName, MessageId messageId) throws PulsarAdminException {
-        try {
-            TopicName ds = validateTopic(topic);
-            String encodedSubName = Codec.encode(subName);
-            request(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName()).path("subscription")
-                    .path(encodedSubName).path("resetcursor")).post(Entity.entity(messageId, MediaType.APPLICATION_JSON),
-                            ErrorData.class);
-        } catch (Exception e) {
-            throw getApiException(e);
-        }
-    }
-
-    @Override
-    public CompletableFuture<Void> resetCursorAsync(String topic, String subName, MessageId messageId) {
-        TopicName ds = validateTopic(topic);
-        String encodedSubName = Codec.encode(subName);
-        return asyncPostRequest(persistentTopics.path(ds.getNamespace()).path(ds.getEncodedLocalName())
-                .path("subscription").path(encodedSubName).path("resetcursor"),
-                Entity.entity(messageId, MediaType.APPLICATION_JSON));
-    }
-
-    @Override
-    public CompletableFuture<MessageId> terminateTopicAsync(String topic) {
-        TopicName ds = validateTopic(topic);
+    public CompletableFuture<MessageId> terminateTopicAsync(String destination) {
+        DestinationName ds = validateTopic(destination);
 
         final CompletableFuture<MessageId> future = new CompletableFuture<>();
         try {
@@ -716,14 +648,14 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
     }
 
     /*
-     * returns topic name with encoded Local Name
+     * returns destination name with encoded Local Name
      */
-    private TopicName validateTopic(String topic) {
+    private DestinationName validateTopic(String destination) {
         // Parsing will throw exception if name is not valid
-        return TopicName.get(topic);
+        return DestinationName.get(destination);
     }
 
-    private List<Message> getMessageFromHttpResponse(Response response) throws Exception {
+    private Message getMessageFromHttpResponse(Response response) throws Exception {
 
         if (response.getStatus() != Status.OK.getStatusCode()) {
             if (response.getStatus() >= 500) {
@@ -744,56 +676,24 @@ public class PersistentTopicsImpl extends BaseResource implements PersistentTopi
 
             Map<String, String> properties = Maps.newTreeMap();
             MultivaluedMap<String, Object> headers = response.getHeaders();
-            Object tmp = headers.getFirst("X-Pulsar-publish-time");
-            if (tmp != null) {
-                properties.put("publish-time", (String) tmp);
-            }
-            tmp =  headers.getFirst(BATCH_HEADER);
-            if (response.getHeaderString(BATCH_HEADER) != null) {
-                properties.put(BATCH_HEADER, (String)tmp);
-                return getIndividualMsgsFromBatch(msgId, data, properties);
+            Object publishTime = headers.getFirst("X-Pulsar-publish-time");
+            if (publishTime != null) {
+                properties.put("publish-time", (String) publishTime);
             }
             for (Entry<String, List<Object>> entry : headers.entrySet()) {
                 String header = entry.getKey();
                 if (header.contains("X-Pulsar-PROPERTY-")) {
-                    String keyName = header.substring("X-Pulsar-PROPERTY-".length(), header.length());
+                    String keyName = header.substring(header.indexOf("X-Pulsar-PROPERTY-") + 1, header.length());
                     properties.put(keyName, (String) entry.getValue().get(0));
                 }
             }
 
-            return Lists.newArrayList(new MessageImpl(msgId, properties, data));
+            return new MessageImpl(msgId, properties, data);
         } finally {
             if (stream != null) {
                 stream.close();
             }
         }
-    }
-
-    private List<Message> getIndividualMsgsFromBatch(String msgId, byte[] data, Map<String, String> properties) {
-        List<Message> ret = new ArrayList<Message>();
-        int batchSize = Integer.parseInt(properties.get(BATCH_HEADER));
-        for (int i = 0; i < batchSize; i++) {
-            String batchMsgId = msgId + ":" + i;
-            PulsarApi.SingleMessageMetadata.Builder singleMessageMetadataBuilder = PulsarApi.SingleMessageMetadata
-                    .newBuilder();
-            ByteBuf buf = Unpooled.wrappedBuffer(data);
-            try {
-                ByteBuf singleMessagePayload = Commands.deSerializeSingleMessageInBatch(buf, singleMessageMetadataBuilder, i,
-                        batchSize);
-                SingleMessageMetadata singleMessageMetadata = singleMessageMetadataBuilder.build();
-                if (singleMessageMetadata.getPropertiesCount() > 0) {
-                    for (KeyValue entry : singleMessageMetadata.getPropertiesList()) {
-                        properties.put(entry.getKey(), entry.getValue());
-                    }
-                }
-                ret.add(new MessageImpl(batchMsgId, properties, singleMessagePayload));
-            } catch (Exception ex) {
-                log.error("Exception occured while trying to get BatchMsgId: {}", batchMsgId, ex);
-            }
-            buf.release();
-            singleMessageMetadataBuilder.recycle();
-        }
-        return ret;
     }
 
     private static final Logger log = LoggerFactory.getLogger(PersistentTopicsImpl.class);

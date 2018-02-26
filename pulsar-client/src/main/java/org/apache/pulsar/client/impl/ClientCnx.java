@@ -23,30 +23,20 @@ import static org.apache.pulsar.client.impl.HttpClient.getPulsarClientVersion;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
-import javax.net.ssl.SSLSession;
-
-import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.Pair;
-import org.apache.http.conn.ssl.DefaultHostnameVerifier;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.PulsarClientException.TimeoutException;
 import org.apache.pulsar.client.impl.BinaryProtoLookupService.LookupDataResult;
-import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.api.Commands;
 import org.apache.pulsar.common.api.PulsarHandler;
-import org.apache.pulsar.common.api.proto.PulsarApi.CommandActiveConsumerChange;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandCloseConsumer;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandCloseProducer;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandConnected;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandError;
-import org.apache.pulsar.common.api.proto.PulsarApi.CommandGetLastMessageIdResponse;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandLookupTopicResponse;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandMessage;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandPartitionedTopicMetadataResponse;
@@ -55,7 +45,6 @@ import org.apache.pulsar.common.api.proto.PulsarApi.CommandReachedEndOfTopic;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSendError;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSendReceipt;
 import org.apache.pulsar.common.api.proto.PulsarApi.CommandSuccess;
-import org.apache.pulsar.common.api.proto.PulsarApi.MessageIdData;
 import org.apache.pulsar.common.api.proto.PulsarApi.ServerError;
 import org.apache.pulsar.common.util.collections.ConcurrentLongHashMap;
 import org.slf4j.Logger;
@@ -63,11 +52,8 @@ import org.slf4j.LoggerFactory;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.unix.Errors.NativeIoException;
-import io.netty.handler.ssl.SslHandler;
 import io.netty.util.concurrent.Promise;
 
 public class ClientCnx extends PulsarHandler {
@@ -75,12 +61,9 @@ public class ClientCnx extends PulsarHandler {
     private final Authentication authentication;
     private State state;
 
-    private final ConcurrentLongHashMap<CompletableFuture<Pair<String, Long>>> pendingRequests = new ConcurrentLongHashMap<>(
-            16, 1);
+    private final ConcurrentLongHashMap<CompletableFuture<String>> pendingRequests = new ConcurrentLongHashMap<>(16, 1);
     private final ConcurrentLongHashMap<CompletableFuture<LookupDataResult>> pendingLookupRequests = new ConcurrentLongHashMap<>(
             16, 1);
-    private final ConcurrentLongHashMap<CompletableFuture<MessageIdData>> pendingGetLastMessageIdRequests = new ConcurrentLongHashMap<>(
-        16, 1);
     private final ConcurrentLongHashMap<ProducerImpl> producers = new ConcurrentLongHashMap<>(16, 1);
     private final ConcurrentLongHashMap<ConsumerImpl> consumers = new ConcurrentLongHashMap<>(16, 1);
 
@@ -94,28 +77,22 @@ public class ClientCnx extends PulsarHandler {
     private volatile int numberOfRejectRequests = 0;
     private final int maxNumberOfRejectedRequestPerConnection;
     private final int rejectedRequestResetTimeSec = 60;
-    private final long operationTimeoutMs;
 
     private String proxyToTargetBrokerAddress = null;
-    // Remote hostName with which client is connected
-    private String remoteHostName = null;
-    private boolean isTlsHostnameVerificationEnable;
-    private DefaultHostnameVerifier hostnameVerifier;
 
     enum State {
-        None, SentConnectFrame, Ready, Failed
+        None, SentConnectFrame, Ready
     }
 
-    public ClientCnx(ClientConfigurationData conf, EventLoopGroup eventLoopGroup) {
+    public ClientCnx(PulsarClientImpl pulsarClient) {
         super(30, TimeUnit.SECONDS);
-        this.pendingLookupRequestSemaphore = new Semaphore(conf.getConcurrentLookupRequest(), true);
-        this.authentication = conf.getAuthentication();
-        this.eventLoopGroup = eventLoopGroup;
-        this.maxNumberOfRejectedRequestPerConnection = conf.getMaxNumberOfRejectedRequestPerConnection();
-        this.operationTimeoutMs = conf.getOperationTimeoutMs();
+        this.pendingLookupRequestSemaphore = new Semaphore(pulsarClient.getConfiguration().getConcurrentLookupRequest(),
+                true);
+        this.authentication = pulsarClient.getConfiguration().getAuthentication();
+        this.eventLoopGroup = pulsarClient.eventLoopGroup();
+        this.maxNumberOfRejectedRequestPerConnection = pulsarClient.getConfiguration()
+                .getMaxNumberOfRejectedRequestPerConnection();
         this.state = State.None;
-        this.isTlsHostnameVerificationEnable = conf.isTlsHostnameVerificationEnable();
-        this.hostnameVerifier = new DefaultHostnameVerifier();
     }
 
     @Override
@@ -123,9 +100,7 @@ public class ClientCnx extends PulsarHandler {
         super.channelActive(ctx);
 
         if (proxyToTargetBrokerAddress == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("{} Connected to broker", ctx.channel());
-            }
+            log.info("{} Connected to broker", ctx.channel());
         } else {
             log.info("{} Connected through proxy to target broker at {}", ctx.channel(), proxyToTargetBrokerAddress);
         }
@@ -134,8 +109,8 @@ public class ClientCnx extends PulsarHandler {
             authData = authentication.getAuthData().getCommandData();
         }
         // Send CONNECT command
-        ctx.writeAndFlush(Commands.newConnect(authentication.getAuthMethodName(), authData,
-                getPulsarClientVersion(), proxyToTargetBrokerAddress))
+        ctx.writeAndFlush(Commands.newConnect(authentication.getAuthMethodName(), authData, getPulsarClientVersion(),
+                proxyToTargetBrokerAddress))
                 .addListener(future -> {
                     if (future.isSuccess()) {
                         if (log.isDebugEnabled()) {
@@ -163,7 +138,6 @@ public class ClientCnx extends PulsarHandler {
         // Fail out all the pending ops
         pendingRequests.forEach((key, future) -> future.completeExceptionally(e));
         pendingLookupRequests.forEach((key, future) -> future.completeExceptionally(e));
-        pendingGetLastMessageIdRequests.forEach((key, future) -> future.completeExceptionally(e));
 
         // Notify all attached producers/consumers so they have a chance to reconnect
         producers.forEach((id, producer) -> producer.connectionClosed(this));
@@ -174,41 +148,15 @@ public class ClientCnx extends PulsarHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        if (state != State.Failed) {
-            // No need to report stack trace for known exceptions that happen in disconnections
-            log.warn("[{}] Got exception {} : {}", remoteAddress, cause.getClass().getSimpleName(), cause.getMessage(),
-                    isKnownException(cause) ? null : cause);
-            state = State.Failed;
-        } else {
-            // At default info level, suppress all subsequent exceptions that are thrown when the connection has already
-            // failed
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Got exception: {}", remoteAddress, cause.getMessage(), cause);
-            }
-        }
-
+        log.warn("{} Exception caught: {}", ctx.channel(), cause.getMessage(), cause);
         ctx.close();
-    }
-
-    public static boolean isKnownException(Throwable t) {
-        return t instanceof NativeIoException || t instanceof ClosedChannelException;
     }
 
     @Override
     protected void handleConnected(CommandConnected connected) {
-
-        if (isTlsHostnameVerificationEnable && remoteHostName != null && !verifyTlsHostName(remoteHostName, ctx)) {
-            // close the connection if host-verification failed with the broker
-            log.warn("[{}] Failed to verify hostname of {}", ctx.channel(), remoteHostName);
-            ctx.close();
-            return;
-        }
-
         checkArgument(state == State.SentConnectFrame);
 
-        if (log.isDebugEnabled()) {
-            log.debug("{} Connection is ready", ctx.channel());
-        }
+        log.info("{} Connection is ready", ctx.channel());
         connectionFuture.complete(null);
         remoteEndpointProtocolVersion = connected.getProtocolVersion();
         state = State.Ready;
@@ -225,11 +173,6 @@ public class ClientCnx extends PulsarHandler {
         if (sendReceipt.hasMessageId()) {
             ledgerId = sendReceipt.getMessageId().getLedgerId();
             entryId = sendReceipt.getMessageId().getEntryId();
-        }
-
-        if (ledgerId == -1 && entryId == -1) {
-            log.warn("[{}] Message has been dropped for non-persistent topic producer-id {}-{}", ctx.channel(),
-                    producerId, sequenceId);
         }
 
         if (log.isDebugEnabled()) {
@@ -254,19 +197,6 @@ public class ClientCnx extends PulsarHandler {
     }
 
     @Override
-    protected void handleActiveConsumerChange(CommandActiveConsumerChange change) {
-        checkArgument(state == State.Ready);
-
-        if (log.isDebugEnabled()) {
-            log.debug("{} Received a consumer group change message from the server : {}", ctx.channel(), change);
-        }
-        ConsumerImpl consumer = consumers.get(change.getConsumerId());
-        if (consumer != null) {
-            consumer.activeConsumerChanged(change.getIsActive());
-        }
-    }
-
-    @Override
     protected void handleSuccess(CommandSuccess success) {
         checkArgument(state == State.Ready);
 
@@ -274,25 +204,9 @@ public class ClientCnx extends PulsarHandler {
             log.debug("{} Received success response from server: {}", ctx.channel(), success.getRequestId());
         }
         long requestId = success.getRequestId();
-        CompletableFuture<Pair<String, Long>> requestFuture = pendingRequests.remove(requestId);
+        CompletableFuture<String> requestFuture = pendingRequests.remove(requestId);
         if (requestFuture != null) {
             requestFuture.complete(null);
-        } else {
-            log.warn("{} Received unknown request id from server: {}", ctx.channel(), success.getRequestId());
-        }
-    }
-
-    @Override
-    protected void handleGetLastMessageIdSuccess(CommandGetLastMessageIdResponse success) {
-        checkArgument(state == State.Ready);
-
-        if (log.isDebugEnabled()) {
-            log.debug("{} Received success GetLastMessageId response from server: {}", ctx.channel(), success.getRequestId());
-        }
-        long requestId = success.getRequestId();
-        CompletableFuture<MessageIdData> requestFuture = pendingGetLastMessageIdRequests.remove(requestId);
-        if (requestFuture != null) {
-            requestFuture.complete(success.getLastMessageId());
         } else {
             log.warn("{} Received unknown request id from server: {}", ctx.channel(), success.getRequestId());
         }
@@ -307,9 +221,9 @@ public class ClientCnx extends PulsarHandler {
                     success.getRequestId(), success.getProducerName());
         }
         long requestId = success.getRequestId();
-        CompletableFuture<Pair<String, Long>> requestFuture = pendingRequests.remove(requestId);
+        CompletableFuture<String> requestFuture = pendingRequests.remove(requestId);
         if (requestFuture != null) {
-            requestFuture.complete(new ImmutablePair<>(success.getProducerName(), success.getLastSequenceId()));
+            requestFuture.complete(success.getProducerName());
         } else {
             log.warn("{} Received unknown request id from server: {}", ctx.channel(), success.getRequestId());
         }
@@ -317,20 +231,12 @@ public class ClientCnx extends PulsarHandler {
 
     @Override
     protected void handleLookupResponse(CommandLookupTopicResponse lookupResult) {
-        if (log.isDebugEnabled()) {
-            log.debug("Received Broker lookup response: {}", lookupResult.getResponse());
-        }
+        log.info("Received Broker lookup response: {}", lookupResult.getResponse());
 
         long requestId = lookupResult.getRequestId();
         CompletableFuture<LookupDataResult> requestFuture = getAndRemovePendingLookupRequest(requestId);
 
         if (requestFuture != null) {
-            if (requestFuture.isCompletedExceptionally()) {
-                if (log.isDebugEnabled()) {
-                    log.debug("{} Request {} already timed-out", ctx.channel(), lookupResult.getRequestId());
-                }
-                return;
-            }
             // Complete future with exception if : Result.response=fail/null
             if (!lookupResult.hasResponse()
                     || CommandLookupTopicResponse.LookupType.Failed.equals(lookupResult.getResponse())) {
@@ -352,20 +258,12 @@ public class ClientCnx extends PulsarHandler {
 
     @Override
     protected void handlePartitionResponse(CommandPartitionedTopicMetadataResponse lookupResult) {
-        if (log.isDebugEnabled()) {
-            log.debug("Received Broker Partition response: {}", lookupResult.getPartitions());
-        }
+        log.info("Received Broker Partition response: {}", lookupResult.getPartitions());
 
         long requestId = lookupResult.getRequestId();
         CompletableFuture<LookupDataResult> requestFuture = getAndRemovePendingLookupRequest(requestId);
 
         if (requestFuture != null) {
-            if (requestFuture.isCompletedExceptionally()) {
-                if (log.isDebugEnabled()) {
-                    log.debug("{} Request {} already timed-out", ctx.channel(), lookupResult.getRequestId());
-                }
-                return;
-            }
             // Complete future with exception if : Result.response=fail/null
             if (!lookupResult.hasResponse()
                     || CommandPartitionedTopicMetadataResponse.LookupType.Failed.equals(lookupResult.getResponse())) {
@@ -401,12 +299,6 @@ public class ClientCnx extends PulsarHandler {
     private boolean addPendingLookupRequests(long requestId, CompletableFuture<LookupDataResult> future) {
         if (pendingLookupRequestSemaphore.tryAcquire()) {
             pendingLookupRequests.put(requestId, future);
-            eventLoopGroup.schedule(() -> {
-                if (!future.isDone()) {
-                    future.completeExceptionally(new TimeoutException(
-                            requestId + " lookup request timedout after ms " + operationTimeoutMs));
-                }
-            }, operationTimeoutMs, TimeUnit.MILLISECONDS);
             return true;
         }
         return false;
@@ -454,7 +346,7 @@ public class ClientCnx extends PulsarHandler {
             log.warn("{} Producer creation has been blocked because backlog quota exceeded for producer topic",
                     ctx.channel());
         }
-        CompletableFuture<Pair<String, Long>> requestFuture = pendingRequests.remove(requestId);
+        CompletableFuture<String> requestFuture = pendingRequests.remove(requestId);
         if (requestFuture != null) {
             requestFuture.completeExceptionally(getPulsarClientException(error.getError(), error.getMessage()));
         } else {
@@ -533,8 +425,8 @@ public class ClientCnx extends PulsarHandler {
         return connectionFuture;
     }
 
-    CompletableFuture<Pair<String, Long>> sendRequestWithId(ByteBuf cmd, long requestId) {
-        CompletableFuture<Pair<String, Long>> future = new CompletableFuture<>();
+    CompletableFuture<String> sendRequestWithId(ByteBuf cmd, long requestId) {
+        CompletableFuture<String> future = new CompletableFuture<>();
         pendingRequests.put(requestId, future);
         ctx.writeAndFlush(cmd).addListener(writeFuture -> {
             if (!writeFuture.isSuccess()) {
@@ -543,22 +435,6 @@ public class ClientCnx extends PulsarHandler {
                 future.completeExceptionally(writeFuture.cause());
             }
         });
-        return future;
-    }
-
-    public CompletableFuture<MessageIdData> sendGetLastMessageId(ByteBuf request, long requestId) {
-        CompletableFuture<MessageIdData> future = new CompletableFuture<>();
-
-        pendingGetLastMessageIdRequests.put(requestId, future);
-
-        ctx.writeAndFlush(request).addListener(writeFuture -> {
-            if (!writeFuture.isSuccess()) {
-                log.warn("{} Failed to send GetLastMessageId request to broker: {}", ctx.channel(), writeFuture.cause().getMessage());
-                pendingGetLastMessageIdRequests.remove(requestId);
-                future.completeExceptionally(writeFuture.cause());
-            }
-        });
-
         return future;
     }
 
@@ -591,39 +467,6 @@ public class ClientCnx extends PulsarHandler {
         }
     }
 
-    /**
-     * verifies host name provided in x509 Certificate in tls session
-     *
-     * it matches hostname with below scenarios
-     *
-     * <pre>
-     *  1. Supports IPV4 and IPV6 host matching
-     *  2. Supports wild card matching for DNS-name
-     *  eg:
-     *     HostName                     CN           Result
-     * 1.  localhost                    localhost    PASS
-     * 2.  localhost                    local*       PASS
-     * 3.  pulsar1-broker.com           pulsar*.com  PASS
-     * </pre>
-     *
-     * @param ctx
-     * @return true if hostname is verified else return false
-     */
-    private boolean verifyTlsHostName(String hostname, ChannelHandlerContext ctx) {
-        ChannelHandler sslHandler = ctx.channel().pipeline().get("tls");
-
-        SSLSession sslSession = null;
-        if (sslHandler != null) {
-            sslSession = ((SslHandler) sslHandler).engine().getSession();
-            if (log.isDebugEnabled()) {
-                log.debug("Verifying HostName for {}, Cipher {}, Protocols {}", hostname, sslSession.getCipherSuite(),
-                        sslSession.getProtocol());
-            }
-            return hostnameVerifier.verify(hostname, sslSession);
-        }
-        return false;
-    }
-
     void registerConsumer(final long consumerId, final ConsumerImpl consumer) {
         consumers.put(consumerId, consumer);
     }
@@ -645,18 +488,12 @@ public class ClientCnx extends PulsarHandler {
                 targetBrokerAddress.getPort());
     }
 
-     void setRemoteHostName(String remoteHostName) {
-        this.remoteHostName = remoteHostName;
-    }
-
     private PulsarClientException getPulsarClientException(ServerError error, String errorMsg) {
         switch (error) {
         case AuthenticationError:
             return new PulsarClientException.AuthenticationException(errorMsg);
         case AuthorizationError:
             return new PulsarClientException.AuthorizationException(errorMsg);
-        case ProducerBusy:
-            return new PulsarClientException.ProducerBusyException(errorMsg);
         case ConsumerBusy:
             return new PulsarClientException.ConsumerBusyException(errorMsg);
         case MetadataError:

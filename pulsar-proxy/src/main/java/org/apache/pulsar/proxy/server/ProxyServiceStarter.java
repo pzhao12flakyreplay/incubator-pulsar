@@ -35,7 +35,6 @@ import com.beust.jcommander.Parameter;
 
 import io.prometheus.client.exporter.MetricsServlet;
 import io.prometheus.client.hotspot.DefaultExports;
-import org.apache.pulsar.common.configuration.VipStatus;
 
 /**
  * Starts an instance of the Pulsar ProxyService
@@ -89,16 +88,11 @@ public class ProxyServiceStarter {
             config.setGlobalZookeeperServers(globalZookeeperServers);
         }
 
-        if ((isBlank(config.getBrokerServiceURL()) && isBlank(config.getBrokerServiceURLTLS()))
-                || config.isAuthorizationEnabled()) {
-            checkArgument(!isEmpty(config.getZookeeperServers()), "zookeeperServers must be provided");
-            checkArgument(!isEmpty(config.getGlobalZookeeperServers()), "globalZookeeperServers must be provided");
-        }
+        checkArgument(!isEmpty(config.getZookeeperServers()), "zookeeperServers must be provided");
+        checkArgument(!isEmpty(config.getGlobalZookeeperServers()), "globalZookeeperServers must be provided");
 
-        java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
-
-        // create proxy service
-        ProxyService proxyService = new ProxyService(config);
+        // create broker service
+        ProxyService discoveryService = new ProxyService(config);
         // create a web-service
         final WebServer server = new WebServer(config);
 
@@ -106,7 +100,7 @@ public class ProxyServiceStarter {
             @Override
             public void run() {
                 try {
-                    proxyService.close();
+                    discoveryService.close();
                     server.stop();
                 } catch (Exception e) {
                     log.warn("server couldn't stop gracefully {}", e.getMessage(), e);
@@ -114,13 +108,11 @@ public class ProxyServiceStarter {
             }
         });
 
-        proxyService.start();
+        discoveryService.start();
 
         // Setup metrics
         DefaultExports.initialize();
         server.addServlet("/metrics", new ServletHolder(MetricsServlet.class));
-        server.addRestResources("/", VipStatus.class.getPackage().getName(),
-                VipStatus.ATTRIBUTE_STATUS_FILE_PATH, config.getStatusFilePath());
 
         // start web-service
         server.start();

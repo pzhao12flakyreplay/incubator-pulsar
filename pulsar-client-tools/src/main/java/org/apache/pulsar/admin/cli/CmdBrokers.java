@@ -82,16 +82,6 @@ public class CmdBrokers extends CmdBase {
             print(admin.brokers().getDynamicConfigurationNames());
         }
     }
-
-    @Parameters(commandDescription = "Get internal configuration information")
-    private class GetInternalConfigurationCmd extends CliCommand {
-
-        @Override
-        void run() throws Exception {
-            print(admin.brokers().getInternalConfigurationData());
-        }
-
-    }
     
     public CmdBrokers(PulsarAdmin admin) {
         super("brokers", admin);
@@ -100,6 +90,5 @@ public class CmdBrokers extends CmdBase {
         jcommander.addCommand("update-dynamic-config", new UpdateConfigurationCmd());
         jcommander.addCommand("list-dynamic-config", new GetUpdatableConfigCmd());
         jcommander.addCommand("get-all-dynamic-config", new GetAllConfigurationsCmd());
-        jcommander.addCommand("get-internal-config", new GetInternalConfigurationCmd());
     }
 }

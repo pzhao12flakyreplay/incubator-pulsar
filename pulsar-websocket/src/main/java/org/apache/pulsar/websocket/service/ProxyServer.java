@@ -18,11 +18,12 @@
  */
 package org.apache.pulsar.websocket.service;
 
+import static org.apache.pulsar.websocket.admin.WebSocketWebResource.ATTRIBUTE_PROXY_SERVICE_NAME;
+
 import java.net.MalformedURLException;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -93,6 +94,7 @@ public class ProxyServer {
             ServerConnector tlsConnector = new ServerConnector(server, -1, -1, sslCtxFactory);
             tlsConnector.setPort(config.getWebServicePortTls());
             connectors.add(tlsConnector);
+
         }
 
         // Limit number of concurrent HTTP connections to avoid getting out of
@@ -110,7 +112,7 @@ public class ProxyServer {
         handlers.add(context);
     }
 
-    public void addRestResources(String basePath, String javaPackages, String attribute, Object attributeValue) {
+    public void addRestResources(String basePath, String javaPackages, WebSocketService service) {
         JacksonJaxbJsonProvider provider = new JacksonJaxbJsonProvider();
         provider.setMapper(ObjectMapperFactory.create());
         ResourceConfig config = new ResourceConfig();
@@ -121,7 +123,7 @@ public class ProxyServer {
         ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
         context.setContextPath(basePath);
         context.addServlet(servletHolder, "/*");
-        context.setAttribute(attribute, attributeValue);
+        context.setAttribute(ATTRIBUTE_PROXY_SERVICE_NAME, service);
         handlers.add(context);
     }
 
@@ -131,7 +133,7 @@ public class ProxyServer {
             RequestLogHandler requestLogHandler = new RequestLogHandler();
             Slf4jRequestLog requestLog = new Slf4jRequestLog();
             requestLog.setExtended(true);
-            requestLog.setLogTimeZone(TimeZone.getDefault().getID());
+            requestLog.setLogTimeZone("GMT");
             requestLog.setLogLatency(true);
             requestLogHandler.setRequestLog(requestLog);
             handlers.add(0, new ContextHandlerCollection());

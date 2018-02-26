@@ -20,24 +20,22 @@ package org.apache.pulsar.client.impl;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageBuilder;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.ProducerConfiguration;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
 
 public abstract class ProducerBase extends HandlerBase implements Producer {
 
     protected final CompletableFuture<Producer> producerCreatedFuture;
-    protected final ProducerConfigurationData conf;
+    protected final ProducerConfiguration conf;
 
-    protected ProducerBase(PulsarClientImpl client, String topic, ProducerConfigurationData conf,
+    protected ProducerBase(PulsarClientImpl client, String topic, ProducerConfiguration conf,
             CompletableFuture<Producer> producerCreatedFuture) {
-        super(client, topic, new Backoff(100, TimeUnit.MILLISECONDS, 60, TimeUnit.SECONDS,
-                Math.max(100, conf.getSendTimeoutMs() - 100), TimeUnit.MILLISECONDS));
+        super(client, topic);
         this.producerCreatedFuture = producerCreatedFuture;
         this.conf = conf;
     }
@@ -99,18 +97,11 @@ public abstract class ProducerBase extends HandlerBase implements Producer {
         return topic;
     }
 
-    public ProducerConfigurationData getConfiguration() {
+    public ProducerConfiguration getConfiguration() {
         return conf;
     }
 
     public CompletableFuture<Producer> producerCreatedFuture() {
         return producerCreatedFuture;
-    }
-
-    @Override
-    public String toString() {
-        return "ProducerBase{" +
-                "topic='" + topic + '\'' +
-                '}';
     }
 }

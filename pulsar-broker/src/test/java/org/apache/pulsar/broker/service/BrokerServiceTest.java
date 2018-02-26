@@ -18,18 +18,16 @@
  */
 package org.apache.pulsar.broker.service;
 
-import static org.apache.pulsar.broker.cache.LocalZooKeeperCacheService.LOCAL_POLICIES_ROOT;
-import static org.apache.pulsar.broker.web.PulsarWebResource.joinPath;
-import static org.mockito.Matchers.anyObject;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
+import static org.apache.pulsar.broker.web.PulsarWebResource.joinPath;
+import static org.mockito.Mockito.anyObject;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,7 +36,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -48,10 +45,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
-import org.apache.bookkeeper.mledger.ManagedLedgerException;
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import org.apache.pulsar.broker.service.BrokerServiceException.PersistenceException;
+import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.BrokerServiceException;
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.admin.BrokerStats;
 import org.apache.pulsar.client.api.Authentication;
@@ -63,12 +59,12 @@ import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.auth.AuthenticationTls;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.policies.data.BundlesData;
 import org.apache.pulsar.common.policies.data.LocalPolicies;
+import org.apache.pulsar.common.policies.data.PersistentSubscriptionStats;
 import org.apache.pulsar.common.policies.data.PersistentTopicStats;
-import org.apache.pulsar.common.policies.data.SubscriptionStats;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -76,6 +72,7 @@ import org.testng.annotations.Test;
 import com.google.common.collect.Lists;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import static org.apache.pulsar.broker.cache.LocalZooKeeperCacheService.LOCAL_POLICIES_ROOT;
 
 /**
  */
@@ -114,7 +111,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         });
         latch1.await();
 
-        admin.lookups().lookupTopic(topic);
+        admin.lookups().lookupDestination(topic);
 
         final CountDownLatch latch2 = new CountDownLatch(1);
         service.getTopic(topic).thenAccept(t -> {
@@ -138,7 +135,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         final String subName = "successSub";
 
         PersistentTopicStats stats;
-        SubscriptionStats subStats;
+        PersistentSubscriptionStats subStats;
 
         ConsumerConfiguration conf = new ConsumerConfiguration();
         conf.setSubscriptionType(SubscriptionType.Exclusive);
@@ -216,7 +213,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         final String subName = "successSharedSub";
 
         PersistentTopicStats stats;
-        SubscriptionStats subStats;
+        PersistentSubscriptionStats subStats;
 
         ConsumerConfiguration conf = new ConsumerConfiguration();
         conf.setSubscriptionType(SubscriptionType.Shared);
@@ -327,7 +324,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         consumer.close();
         Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
         JsonArray metrics = brokerStatsClient.getMetrics();
-        assertEquals(metrics.size(), 5, metrics.toString());
+        assertEquals(metrics.size(), 6, metrics.toString());
 
         // these metrics seem to be arriving in different order at different times...
         // is the order really relevant here?
@@ -371,15 +368,15 @@ public class BrokerServiceTest extends BrokerTestBase {
         }
 
         rolloverPerIntervalStats();
-        JsonObject topicStats = brokerStatsClient.getTopics();
-        assertEquals(topicStats.size(), 2, topicStats.toString());
+        JsonObject destinationStats = brokerStatsClient.getDestinations();
+        assertEquals(destinationStats.size(), 2, destinationStats.toString());
 
         for (String ns : nsList) {
-            JsonObject nsObject = topicStats.getAsJsonObject(ns);
-            List<String> topicList = admin.namespaces().getTopics(ns);
+            JsonObject nsObject = destinationStats.getAsJsonObject(ns);
+            List<String> topicList = admin.namespaces().getDestinations(ns);
             for (String topic : topicList) {
                 NamespaceBundle bundle = (NamespaceBundle) pulsar.getNamespaceService()
-                        .getBundle(TopicName.get(topic));
+                        .getBundle(DestinationName.get(topic));
                 JsonObject bundleObject = nsObject.getAsJsonObject(bundle.getBundleRange());
                 JsonObject topicObject = bundleObject.getAsJsonObject("persistent");
                 AtomicBoolean topicPresent = new AtomicBoolean();
@@ -396,8 +393,8 @@ public class BrokerServiceTest extends BrokerTestBase {
             producer.close();
         }
         for (String ns : nsList) {
-            List<String> topics = admin.namespaces().getTopics(ns);
-            for (String dest : topics) {
+            List<String> destinations = admin.namespaces().getDestinations(ns);
+            for (String dest : destinations) {
                 admin.persistentTopics().delete(dest);
             }
             admin.namespaces().deleteNamespace(ns);
@@ -510,7 +507,7 @@ public class BrokerServiceTest extends BrokerTestBase {
             consumer.close();
             fail("should fail");
         } catch (Exception e) {
-            assertTrue(e.getMessage().contains("General OpenSslEngine problem"));
+            assertTrue(e.getMessage().contains("General SSLEngine problem"));
         } finally {
             pulsarClient.close();
         }
@@ -733,7 +730,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     /**
      * Verifies: client side throttling.
-     *
+     * 
      * @throws Exception
      */
     @Test
@@ -761,12 +758,12 @@ public class BrokerServiceTest extends BrokerTestBase {
 
         // own namespace bundle
         final String topicName = "persistent://" + namespace + "/my-topic";
-        TopicName topic = TopicName.get(topicName);
+        DestinationName destination = DestinationName.get(topicName);
         Producer producer = pulsarClient.createProducer(topicName);
         producer.close();
 
         // disable namespace-bundle
-        NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(topic);
+        NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(destination);
         pulsar.getNamespaceService().getOwnershipCache().updateBundleState(bundle, false);
 
         // try to create topic which should fail as bundle is disable
@@ -782,11 +779,11 @@ public class BrokerServiceTest extends BrokerTestBase {
 
         }
     }
-
+    
     /**
      * Verifies brokerService should not have deadlock and successfully remove topic from topicMap on topic-failure and
      * it should not introduce deadlock while performing it.
-     *
+     * 
      */
     @Test(timeOut = 3000)
     public void testTopicFailureShouldNotHaveDeadLock() {
@@ -831,61 +828,9 @@ public class BrokerServiceTest extends BrokerTestBase {
         }
     }
 
-    @Test
-    public void testLedgerOpenFailureShouldNotHaveDeadLock() throws Exception {
-        final String namespace = "prop/usw/my-ns";
-        final String deadLockTestTopic = "persistent://" + namespace + "/deadLockTestTopic";
-
-        // let this broker own this namespace bundle by creating a topic
-        try {
-            final String successfulTopic = "persistent://" + namespace + "/ownBundleTopic";
-            Producer producer = pulsarClient.createProducer(successfulTopic);
-            producer.close();
-        } catch (Exception e) {
-            fail(e.getMessage());
-        }
-
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        BrokerService service = spy(pulsar.getBrokerService());
-        // create topic will fail to get managedLedgerConfig
-        CompletableFuture<ManagedLedgerConfig> failedManagedLedgerConfig = new CompletableFuture<>();
-        failedManagedLedgerConfig.complete(null);
-        doReturn(failedManagedLedgerConfig).when(service).getManagedLedgerConfig(anyObject());
-
-        CompletableFuture<Void> topicCreation = new CompletableFuture<Void>();
-        // fail managed-ledger future
-        Field ledgerField = ManagedLedgerFactoryImpl.class.getDeclaredField("ledgers");
-        ledgerField.setAccessible(true);
-        ConcurrentHashMap<String, CompletableFuture<ManagedLedgerImpl>> ledgers = (ConcurrentHashMap<String, CompletableFuture<ManagedLedgerImpl>>) ledgerField
-                .get(pulsar.getManagedLedgerFactory());
-        CompletableFuture<ManagedLedgerImpl> future = new CompletableFuture<>();
-        future.completeExceptionally(new ManagedLedgerException("ledger opening failed"));
-        ledgers.put(namespace + "/persistent/deadLockTestTopic", future);
-
-        // create topic async and wait on the future completion
-        executor.submit(() -> {
-            service.getTopic(deadLockTestTopic).thenAccept(topic -> topicCreation.complete(null)).exceptionally(e -> {
-                topicCreation.completeExceptionally(e.getCause());
-                return null;
-            });
-        });
-
-        // future-result should be completed with exception
-        try {
-            topicCreation.get(1, TimeUnit.SECONDS);
-        } catch (TimeoutException | InterruptedException e) {
-            fail("there is a dead-lock and it should have been prevented");
-        } catch (ExecutionException e) {
-            assertTrue(e.getCause() instanceof PersistenceException);
-        } finally {
-            executor.shutdownNow();
-            ledgers.clear();
-        }
-    }
-
     /**
      * It verifies that policiesCache() copies global-policy data into local-policy data and returns combined result
-     *
+     * 
      * @throws Exception
      */
     @Test
@@ -899,5 +844,4 @@ public class BrokerServiceTest extends BrokerTestBase {
         assertTrue(policy.isPresent());
         assertEquals(policy.get().bundles.numBundles, totalBundle);
     }
-
 }

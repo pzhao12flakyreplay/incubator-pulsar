@@ -18,35 +18,24 @@
  */
 package org.apache.pulsar.testclient;
 
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
-import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 import java.io.FileInputStream;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.text.DecimalFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 
-import org.HdrHistogram.Histogram;
-import org.HdrHistogram.Recorder;
 import org.apache.pulsar.client.api.ClientConfiguration;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.ConsumerConfiguration;
-import org.apache.pulsar.client.api.CryptoKeyReader;
-import org.apache.pulsar.client.api.EncryptionKeyInfo;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageListener;
 import org.apache.pulsar.client.api.PulsarClient;
-import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,10 +52,6 @@ public class PerformanceConsumer {
     private static final LongAdder bytesReceived = new LongAdder();
     private static final DecimalFormat dec = new DecimalFormat("0.000");
 
-    private static Recorder recorder = new Recorder(TimeUnit.DAYS.toMillis(10), 5);
-    private static Recorder cumulativeRecorder = new Recorder(TimeUnit.DAYS.toMillis(10), 5);
-
-
     static class Arguments {
 
         @Parameter(names = { "-h", "--help" }, description = "Help message", help = true)
@@ -79,16 +64,13 @@ public class PerformanceConsumer {
         public List<String> topic;
 
         @Parameter(names = { "-t", "--num-topics" }, description = "Number of topics")
-        public int numTopics = 1;
+        public int numDestinations = 1;
 
         @Parameter(names = { "-n", "--num-consumers" }, description = "Number of consumers (per topic)")
         public int numConsumers = 1;
 
         @Parameter(names = { "-s", "--subscriber-name" }, description = "Subscriber name prefix")
         public String subscriberName = "sub";
-
-        @Parameter(names = { "-st", "--subscription-type" }, description = "Subscriber name prefix")
-        public SubscriptionType subscriptionType = SubscriptionType.Exclusive;
 
         @Parameter(names = { "-r", "--rate" }, description = "Simulate a slow message consumer (rate in msg/s)")
         public double rate = 0;
@@ -113,21 +95,6 @@ public class PerformanceConsumer {
         @Parameter(names = {
                 "--auth_params" }, description = "Authentication parameters, e.g., \"key1:val1,key2:val2\"")
         public String authParams;
-
-        @Parameter(names = {
-                "--use-tls" }, description = "Use TLS encryption on the connection")
-        public boolean useTls;
-
-        @Parameter(names = {
-                "--trust-cert-file" }, description = "Path for the trusted TLS certificate file")
-        public String tlsTrustCertsFilePath = "";
-
-        @Parameter(names = { "-k", "--encryption-key-name" }, description = "The private key name to decrypt payload")
-        public String encKeyName = null;
-
-        @Parameter(names = { "-v",
-                "--encryption-key-value-file" }, description = "The file which contains the private key to decrypt payload")
-        public String encKeyFile = null;
     }
 
     public static void main(String[] args) throws Exception {
@@ -149,7 +116,7 @@ public class PerformanceConsumer {
         }
 
         if (arguments.topic.size() != 1) {
-            System.out.println("Only one topic name is allowed");
+            System.out.println("Only one destination name is allowed");
             jc.usage();
             System.exit(-1);
         }
@@ -178,14 +145,6 @@ public class PerformanceConsumer {
             if (arguments.authParams == null) {
                 arguments.authParams = prop.getProperty("authParams", null);
             }
-
-            if (arguments.useTls == false) {
-                arguments.useTls = Boolean.parseBoolean(prop.getProperty("useTls"));
-            }
-
-            if (isBlank(arguments.tlsTrustCertsFilePath)) {
-                arguments.tlsTrustCertsFilePath = prop.getProperty("tlsTrustCertsFilePath", "");
-            }
         }
 
         // Dump config variables
@@ -193,7 +152,7 @@ public class PerformanceConsumer {
         ObjectWriter w = m.writerWithDefaultPrettyPrinter();
         log.info("Starting Pulsar performance consumer with config: {}", w.writeValueAsString(arguments));
 
-        final TopicName prefixTopicName = TopicName.get(arguments.topic.get(0));
+        final DestinationName prefixDestinationName = DestinationName.get(arguments.topic.get(0));
 
         final RateLimiter limiter = arguments.rate > 0 ? RateLimiter.create(arguments.rate) : null;
 
@@ -206,10 +165,6 @@ public class PerformanceConsumer {
                     limiter.acquire();
                 }
 
-                long latencyMillis = System.currentTimeMillis() - msg.getPublishTime();
-                recorder.recordValue(latencyMillis);
-                cumulativeRecorder.recordValue(latencyMillis);
-
                 consumer.acknowledgeAsync(msg);
             }
         };
@@ -221,47 +176,17 @@ public class PerformanceConsumer {
         if (isNotBlank(arguments.authPluginClassName)) {
             clientConf.setAuthentication(arguments.authPluginClassName, arguments.authParams);
         }
-        clientConf.setUseTls(arguments.useTls);
-        clientConf.setTlsTrustCertsFilePath(arguments.tlsTrustCertsFilePath);
         PulsarClient pulsarClient = new PulsarClientImpl(arguments.serviceURL, clientConf);
 
-        class EncKeyReader implements CryptoKeyReader {
-
-            EncryptionKeyInfo keyInfo = new EncryptionKeyInfo();
-
-            EncKeyReader(byte[] value) {
-                keyInfo.setKey(value);
-            }
-
-            @Override
-            public EncryptionKeyInfo getPublicKey(String keyName, Map<String, String> keyMeta) {
-                return null;
-            }
-
-            @Override
-            public EncryptionKeyInfo getPrivateKey(String keyName, Map<String, String> keyMeta) {
-                if (keyName.equals(arguments.encKeyName)) {
-                    return keyInfo;
-                }
-                return null;
-            }
-        }
         List<Future<Consumer>> futures = Lists.newArrayList();
         ConsumerConfiguration consumerConfig = new ConsumerConfiguration();
         consumerConfig.setMessageListener(listener);
         consumerConfig.setReceiverQueueSize(arguments.receiverQueueSize);
-        consumerConfig.setSubscriptionType(arguments.subscriptionType);
 
-        if (arguments.encKeyName != null) {
-            byte[] pKey = Files.readAllBytes(Paths.get(arguments.encKeyFile));
-            EncKeyReader keyReader = new EncKeyReader(pKey);
-            consumerConfig.setCryptoKeyReader(keyReader);
-        }
-
-        for (int i = 0; i < arguments.numTopics; i++) {
-            final TopicName topicName = (arguments.numTopics == 1) ? prefixTopicName
-                    : TopicName.get(String.format("%s-%d", prefixTopicName, i));
-            log.info("Adding {} consumers on topic {}", arguments.numConsumers, topicName);
+        for (int i = 0; i < arguments.numDestinations; i++) {
+            final DestinationName destinationName = (arguments.numDestinations == 1) ? prefixDestinationName
+                    : DestinationName.get(String.format("%s-%d", prefixDestinationName, i));
+            log.info("Adding {} consumers on destination {}", arguments.numConsumers, destinationName);
 
             for (int j = 0; j < arguments.numConsumers; j++) {
                 String subscriberName;
@@ -271,7 +196,7 @@ public class PerformanceConsumer {
                     subscriberName = arguments.subscriberName;
                 }
 
-                futures.add(pulsarClient.subscribeAsync(topicName.toString(), subscriberName, consumerConfig));
+                futures.add(pulsarClient.subscribeAsync(destinationName.toString(), subscriberName, consumerConfig));
             }
         }
 
@@ -279,20 +204,10 @@ public class PerformanceConsumer {
             future.get();
         }
 
-        log.info("Start receiving from {} consumers on {} topics", arguments.numConsumers,
-                arguments.numTopics);
-
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            public void run() {
-                printAggregatedStats();
-            }
-        });
-
+        log.info("Start receiving from {} consumers on {} destinations", arguments.numConsumers,
+                arguments.numDestinations);
 
         long oldTime = System.nanoTime();
-
-        Histogram reportHistogram = null;
-
 
         while (true) {
             try {
@@ -307,39 +222,10 @@ public class PerformanceConsumer {
             double throughput = bytesReceived.sumThenReset() / elapsed * 8 / 1024 / 1024;
 
             log.info("Throughput received: {}  msg/s -- {} Mbit/s", dec.format(rate), dec.format(throughput));
-
-            reportHistogram = recorder.getIntervalHistogram(reportHistogram);
-
-            log.info(
-                    "Throughput received: {}  msg/s -- {} Mbit/s --- Latency: mean: {} ms - med: {} - 95pct: {} - 99pct: {} - 99.9pct: {} - 99.99pct: {} - Max: {}",
-                    dec.format(rate), dec.format(throughput),
-                    dec.format(reportHistogram.getMean()),
-                    dec.format(reportHistogram.getValueAtPercentile(50)),
-                    dec.format(reportHistogram.getValueAtPercentile(95)),
-                    dec.format(reportHistogram.getValueAtPercentile(99)),
-                    dec.format(reportHistogram.getValueAtPercentile(99.9)),
-                    dec.format(reportHistogram.getValueAtPercentile(99.99)),
-                    dec.format(reportHistogram.getMaxValue()));
-
-            reportHistogram.reset();
             oldTime = now;
         }
 
         pulsarClient.close();
-    }
-    private static void printAggregatedStats() {
-        Histogram reportHistogram = cumulativeRecorder.getIntervalHistogram();
-
-        log.info(
-                "Aggregated latency stats --- Latency: mean: {} ms - med: {} - 95pct: {} - 99pct: {} - 99.9pct: {} - 99.99pct: {} - 99.999pct: {} - Max: {}",
-                dec.format(reportHistogram.getMean() / 1000.0),
-                dec.format(reportHistogram.getValueAtPercentile(50)),
-                dec.format(reportHistogram.getValueAtPercentile(95)),
-                dec.format(reportHistogram.getValueAtPercentile(99)),
-                dec.format(reportHistogram.getValueAtPercentile(99.9)),
-                dec.format(reportHistogram.getValueAtPercentile(99.99)),
-                dec.format(reportHistogram.getValueAtPercentile(99.999)),
-                dec.format(reportHistogram.getMaxValue()));
     }
 
     private static final Logger log = LoggerFactory.getLogger(PerformanceConsumer.class);

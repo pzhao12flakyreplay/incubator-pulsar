@@ -21,8 +21,8 @@ package org.apache.pulsar.admin.cli;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.pulsar.common.naming.TopicDomain;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.DestinationDomain;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
@@ -40,30 +40,21 @@ abstract class CliCommand {
 
     String validateNamespace(List<String> params) {
         String namespace = checkArgument(params);
-        return NamespaceName.get(namespace).toString();
+        return new NamespaceName(namespace).toString();
     }
 
-    String validateTopicName(List<String> params) {
-        String topic = checkArgument(params);
-        return TopicName.get(topic).toString();
+    String validateDestination(List<String> params) {
+        String destination = checkArgument(params);
+        return DestinationName.get(destination).toString();
     }
 
     String validatePersistentTopic(List<String> params) {
-        String topic = checkArgument(params);
-        TopicName topicName = TopicName.get(topic);
-        if (topicName.getDomain() != TopicDomain.persistent) {
+        String destination = checkArgument(params);
+        DestinationName ds = DestinationName.get(destination);
+        if (ds.getDomain() != DestinationDomain.persistent) {
             throw new ParameterException("Need to provide a persistent topic name");
         }
-        return topicName.toString();
-    }
-    
-    String validateNonPersistentTopic(List<String> params) {
-        String topic = checkArgument(params);
-        TopicName topicName = TopicName.get(topic);
-        if (topicName.getDomain() != TopicDomain.non_persistent) {
-            throw new ParameterException("Need to provide a non-persistent topic name");
-        }
-        return topicName.toString();
+        return ds.toString();
     }
 
     void validateLatencySampleRate(int sampleRate) {

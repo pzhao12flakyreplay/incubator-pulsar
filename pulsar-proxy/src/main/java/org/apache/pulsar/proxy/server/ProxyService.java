@@ -19,7 +19,6 @@
 package org.apache.pulsar.proxy.server;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.apache.commons.lang3.StringUtils.isBlank;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -28,13 +27,12 @@ import java.net.UnknownHostException;
 
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
-import org.apache.pulsar.broker.authorization.AuthorizationService;
+import org.apache.pulsar.broker.authorization.AuthorizationManager;
 import org.apache.pulsar.broker.cache.ConfigurationCacheService;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.ClientConfiguration;
 import org.apache.pulsar.client.impl.ConnectionPool;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
-import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.apache.pulsar.zookeeper.LocalZooKeeperConnectionService;
 import org.apache.pulsar.zookeeper.ZooKeeperClientFactory;
@@ -60,7 +58,7 @@ public class ProxyService implements Closeable {
     private final String serviceUrlTls;
     private ConfigurationCacheService configurationCacheService;
     private AuthenticationService authenticationService;
-    private AuthorizationService authorizationService;
+    private AuthorizationManager authorizationManager;
     private ZooKeeperClientFactory zkClientFactory = null;
 
     private final EventLoopGroup acceptorGroup;
@@ -100,34 +98,27 @@ public class ProxyService implements Closeable {
             clientConfiguration.setAuthentication(proxyConfig.getBrokerClientAuthenticationPlugin(),
                     proxyConfig.getBrokerClientAuthenticationParameters());
         }
-        if (proxyConfig.isTlsEnabledWithBroker()) {
-            clientConfiguration.setUseTls(true);
-            clientConfiguration.setTlsTrustCertsFilePath(proxyConfig.getBrokerClientTrustCertsFilePath());
-            clientConfiguration.setTlsAllowInsecureConnection(proxyConfig.isTlsAllowInsecureConnection());
-        }
 
         this.client = new PulsarClientImpl(serviceUrl, clientConfiguration, workerGroup);
         this.clientAuthentication = clientConfiguration.getAuthentication();
     }
 
     public void start() throws Exception {
-        ServiceConfiguration serviceConfiguration = PulsarConfigurationLoader.convertFrom(proxyConfig);
-        authenticationService = new AuthenticationService(serviceConfiguration);
+        localZooKeeperConnectionService = new LocalZooKeeperConnectionService(getZooKeeperClientFactory(),
+                proxyConfig.getZookeeperServers(), proxyConfig.getZookeeperSessionTimeoutMs());
+        localZooKeeperConnectionService.start(new ShutdownService() {
+            @Override
+            public void shutdown(int exitCode) {
+                LOG.error("Lost local ZK session. Shutting down the proxy");
+                Runtime.getRuntime().halt(-1);
+            }
+        });
 
-        if (!isBlank(proxyConfig.getZookeeperServers()) && !isBlank(proxyConfig.getGlobalZookeeperServers())) {
-            localZooKeeperConnectionService = new LocalZooKeeperConnectionService(getZooKeeperClientFactory(),
-                    proxyConfig.getZookeeperServers(), proxyConfig.getZookeeperSessionTimeoutMs());
-            localZooKeeperConnectionService.start(new ShutdownService() {
-                @Override
-                public void shutdown(int exitCode) {
-                    LOG.error("Lost local ZK session. Shutting down the proxy");
-                    Runtime.getRuntime().halt(-1);
-                }
-            });
-            discoveryProvider = new BrokerDiscoveryProvider(this.proxyConfig, getZooKeeperClientFactory());
-            this.configurationCacheService = new ConfigurationCacheService(discoveryProvider.globalZkCache);
-            authorizationService = new AuthorizationService(serviceConfiguration, configurationCacheService);
-        }
+        discoveryProvider = new BrokerDiscoveryProvider(this.proxyConfig, getZooKeeperClientFactory());
+        this.configurationCacheService = new ConfigurationCacheService(discoveryProvider.globalZkCache);
+        ServiceConfiguration serviceConfiguration = createServiceConfiguration(proxyConfig);
+        authenticationService = new AuthenticationService(serviceConfiguration);
+        authorizationManager = new AuthorizationManager(serviceConfiguration, configurationCacheService);
 
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
@@ -148,7 +139,7 @@ public class ProxyService implements Closeable {
             ServerBootstrap tlsBootstrap = bootstrap.clone();
             tlsBootstrap.childHandler(new ServiceChannelInitializer(this, proxyConfig, true));
             tlsBootstrap.bind(proxyConfig.getServicePortTls()).sync();
-            LOG.info("Started Pulsar TLS Proxy on port {}", proxyConfig.getServicePortTls());
+            LOG.info("Started Pulsar TLS Proxy on port {}", proxyConfig.getWebServicePortTls());
         }
     }
 
@@ -184,6 +175,15 @@ public class ProxyService implements Closeable {
         client.close();
     }
 
+    private ServiceConfiguration createServiceConfiguration(ProxyConfiguration config) {
+        ServiceConfiguration serviceConfiguration = new ServiceConfiguration();
+        serviceConfiguration.setAuthenticationEnabled(config.isAuthenticationEnabled());
+        serviceConfiguration.setAuthorizationEnabled(config.isAuthorizationEnabled());
+        serviceConfiguration.setAuthenticationProviders(config.getAuthenticationProviders());
+        serviceConfiguration.setProperties(config.getProperties());
+        return serviceConfiguration;
+    }
+
     public String getServiceUrl() {
         return serviceUrl;
     }
@@ -200,8 +200,8 @@ public class ProxyService implements Closeable {
         return authenticationService;
     }
 
-    public AuthorizationService getAuthorizationService() {
-        return authorizationService;
+    public AuthorizationManager getAuthorizationManager() {
+        return authorizationManager;
     }
 
     public Authentication getClientAuthentication() {

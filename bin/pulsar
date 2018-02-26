@@ -29,7 +29,7 @@ DEFAULT_DISCOVERY_CONF=$PULSAR_HOME/conf/discovery.conf
 DEFAULT_PROXY_CONF=$PULSAR_HOME/conf/proxy.conf
 DEFAULT_STANDALONE_CONF=$PULSAR_HOME/conf/standalone.conf
 DEFAULT_WEBSOCKET_CONF=$PULSAR_HOME/conf/websocket.conf
-DEFAULT_LOG_CONF=$PULSAR_HOME/conf/log4j2.yaml
+DEFAULT_LOG_CONF=$PULSAR_HOME/conf/log4j.properties
 
 if [ -f "$PULSAR_HOME/conf/pulsar_env.sh" ]
 then
@@ -75,7 +75,6 @@ where command is one of:
     proxy               Run a pulsar proxy
     websocket           Run a web socket proxy server
     standalone          Run a broker server with local bookies and local zookeeper
-    compact-topic       Run compaction against a topic
 
     initialize-cluster-metadata     One-time metadata initialization
     zookeeper-shell     Open a ZK shell client
@@ -174,7 +173,7 @@ fi
 
 PULSAR_CLASSPATH="$PULSAR_JAR:$PULSAR_CLASSPATH:$PULSAR_EXTRA_CLASSPATH"
 PULSAR_CLASSPATH="`dirname $PULSAR_LOG_CONF`:$PULSAR_CLASSPATH"
-OPTS="$OPTS -Dlog4j.configurationFile=`basename $PULSAR_LOG_CONF`"
+OPTS="$OPTS -Dlog4j.configuration=`basename $PULSAR_LOG_CONF`"
 
 # Ensure we can read bigger content from ZK. (It might be
 # rarely needed when trying to list many z-nodes under a
@@ -186,29 +185,36 @@ OPTS="-cp $PULSAR_CLASSPATH $OPTS"
 OPTS="$OPTS $PULSAR_EXTRA_OPTS"
 
 # log directory & file
-PULSAR_LOG_APPENDER=${PULSAR_LOG_APPENDER:-"Console"}
+PULSAR_ROOT_LOGGER=${PULSAR_ROOT_LOGGER:-"INFO,CONSOLE"}
 PULSAR_LOG_DIR=${PULSAR_LOG_DIR:-"$PULSAR_HOME/logs"}
 
 #Configure log configuration system properties
-OPTS="$OPTS -Dpulsar.log.appender=$PULSAR_LOG_APPENDER"
+OPTS="$OPTS -Dpulsar.root.logger=$PULSAR_ROOT_LOGGER"
 OPTS="$OPTS -Dpulsar.log.dir=$PULSAR_LOG_DIR"
 
 #Change to PULSAR_HOME to support relative paths
 cd "$PULSAR_HOME"
 if [ $COMMAND == "broker" ]; then
     PULSAR_LOG_FILE=${PULSAR_LOG_FILE:-"pulsar-broker.log"}
-    exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.PulsarBrokerStarter --broker-conf $PULSAR_BROKER_CONF $@
+    exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.PulsarBrokerStarter $PULSAR_BROKER_CONF $@
 elif [ $COMMAND == "bookie" ]; then
     PULSAR_LOG_FILE=${PULSAR_LOG_FILE:-"bookkeeper.log"}
     exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.bookkeeper.proto.BookieServer --conf $PULSAR_BOOKKEEPER_CONF $@
 elif [ $COMMAND == "zookeeper" ]; then
     PULSAR_LOG_FILE=${PULSAR_LOG_FILE:-"zookeeper.log"}
+
+    # Add instrumentation
+    WEAVER_JAR=`find $PULSAR_HOME/lib -name 'aspectjweaver-*.jar'`
+    if [ -n "$WEAVER_JAR" ]; then OPTS="$OPTS -javaagent:$WEAVER_JAR"; fi
     exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.zookeeper.ZooKeeperStarter $PULSAR_ZK_CONF $@
 elif [ $COMMAND == "global-zookeeper" ]; then
     PULSAR_LOG_FILE=${PULSAR_LOG_FILE:-"global-zookeeper.log"}
     # Allow global ZK to turn into read-only mode when it cannot reach the quorum
     OPTS="${OPTS} -Dreadonlymode.enabled=true"
-    exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.zookeeper.GlobalZooKeeperStarter $PULSAR_GLOBAL_ZK_CONF $@
+    # Add instrumentation
+    WEAVER_JAR=`find $PULSAR_HOME/lib -name 'aspectjweaver-*.jar'`
+    if [ -n "$WEAVER_JAR" ]; then OPTS="$OPTS -javaagent:$WEAVER_JAR"; fi
+    exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.zookeeper.ZooKeeperStarter $PULSAR_GLOBAL_ZK_CONF $@
 elif [ $COMMAND == "discovery" ]; then
     PULSAR_LOG_FILE=${PULSAR_LOG_FILE:-"discovery.log"}
     exec $JAVA $OPTS -Dpulsar.log.file=$PULSAR_LOG_FILE org.apache.pulsar.discovery.service.server.DiscoveryServiceStarter $PULSAR_DISCOVERY_CONF $@
@@ -225,8 +231,6 @@ elif [ $COMMAND == "initialize-cluster-metadata" ]; then
     exec $JAVA $OPTS org.apache.pulsar.PulsarClusterMetadataSetup $@
 elif [ $COMMAND == "zookeeper-shell" ]; then
     exec $JAVA $OPTS org.apache.zookeeper.ZooKeeperMain $@
-elif [ $COMMAND == "compact-topic" ]; then
-    exec $JAVA $OPTS org.apache.pulsar.compaction.CompactorTool --broker-conf $PULSAR_BROKER_CONF $@
 elif [ $COMMAND == "help" ]; then
     pulsar_help;
 else

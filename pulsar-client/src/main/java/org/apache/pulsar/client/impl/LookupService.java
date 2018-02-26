@@ -22,7 +22,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.commons.lang3.tuple.Pair;
-import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.naming.DestinationName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 
 /**
@@ -42,19 +42,19 @@ interface LookupService extends AutoCloseable {
      * Calls broker lookup-api to get broker {@link InetSocketAddress} which serves namespace bundle that contains given
      * topic.
      *
-     * @param topicName
+     * @param destination:
      *            topic-name
      * @return a pair of addresses, representing the logical and physical address of the broker that serves given topic
      */
-    public CompletableFuture<Pair<InetSocketAddress, InetSocketAddress>> getBroker(TopicName topicName);
+    public CompletableFuture<Pair<InetSocketAddress, InetSocketAddress>> getBroker(DestinationName topic);
 
 	/**
 	 * Returns {@link PartitionedTopicMetadata} for a given topic.
 	 *
-	 * @param topicName topic-name
+	 * @param destination : topic-name
 	 * @return
 	 */
-	public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadata(TopicName topicName);
+	public CompletableFuture<PartitionedTopicMetadata> getPartitionedTopicMetadata(DestinationName destination);
 
 	/**
 	 * Returns broker-service lookup api url.
