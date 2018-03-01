@@ -17,13 +17,4 @@
 # under the License.
 #
 
-configs:
-- name: webServiceUrl
-  default: http://localhost:8080/
-- name: brokerServiceUrl
-  default: pulsar://localhost:6650/
-- name: authPlugin
-- name: authParams
-- name: useTls
-- name: tlsAllowInsecureConnection
-- name: tlsTrustCertsFilePath
+description: A wrapper around the [`pulsar`](#pulsar) tool to start the process in the background with [nohup](https://en.wikipedia.org/wiki/Nohup). `pulsar-daemon` has the same command interface as `pulsar`.
